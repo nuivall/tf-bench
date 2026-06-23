@@ -63,8 +63,8 @@ curl -sSfLo /etc/apt/sources.list.d/scylla.list https://s3.amazonaws.com/downloa
 sed -i 's/signed-by=\/etc\/apt\/keyrings\/scylladb.gpg/trusted=yes/g' /etc/apt/sources.list.d/scylla.list
 
 apt-get update
-# Force non-interactive installation to prevent blocking on user inputs
-DEBIAN_FRONTEND=noninteractive apt-get install -y scylla
+# Force non-interactive installation and keep pre-created io.conf configuration
+DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" scylla
 
 # 4. System Tuning and Configurations
 echo "Running system configurations..."
