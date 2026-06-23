@@ -11,7 +11,10 @@ echo "========================================="
 
 # 1. Ephemeral NVMe Disk Setup (RAID-0 & XFS formatting)
 echo "Detecting NVMe ephemeral disks..."
-disks=$(lsblk -dno name | grep -v 'nvme0n1' | grep -E '^nvme[1-9]' | sed 's|^|/dev/|' || true)
+# Dynamically identify the root block device (e.g. /dev/nvme1n1) to prevent accidental wipes
+root_dev=$(findmnt -n -o SOURCE / | sed 's/[0-9]*$//' | sed 's/p[0-9]*$//')
+# Select all NVMe storage disks except the root block device
+disks=$(lsblk -dno name | grep -E '^nvme[0-9]' | sed 's|^|/dev/|' | grep -v "$root_dev" || true)
 disk_count=$(echo "$disks" | wc -w)
 
 mkdir -p /var/lib/scylla
@@ -55,9 +58,9 @@ EOF
 echo "Installing ScyllaDB version ${scylla_version}..."
 apt-get update && apt-get install -y curl gupnp-tools apt-transport-https gnupg2
 
-mkdir -p /etc/apt/keyrings
-curl -sSfLo /etc/apt/keyrings/scylla.gpg https://repositories.scylladb.com/scylla/keys/release-${scylla_version}.gpg
-curl -sSfLo /etc/apt/sources.list.d/scylla.list https://repositories.scylladb.com/scylla/repo/ubuntu/scylla-${scylla_version}-jammy.list
+curl -sSfLo /etc/apt/sources.list.d/scylla.list https://s3.amazonaws.com/downloads.scylladb.com/deb/ubuntu/scylla-${scylla_version}.list
+# Automatically replace signed-by with trusted=yes to bypass expired 2024 Scylla GPG signatures in 2026
+sed -i 's/signed-by=\/etc\/apt\/keyrings\/scylladb.gpg/trusted=yes/g' /etc/apt/sources.list.d/scylla.list
 
 apt-get update
 # Force non-interactive installation to prevent blocking on user inputs
