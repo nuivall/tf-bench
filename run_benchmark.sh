@@ -66,6 +66,11 @@ if [ ! -f "$KEY_FILE" ]; then
     exit 1
 fi
 
-# 4. Trigger the remote execution on Loader-0 over SSH
-echo "Connecting to Loader-0 over SSH and starting the automated benchmark..."
-ssh -i "$KEY_FILE" -o StrictHostKeyChecking=no ubuntu@"$FIRST_LOADER" "$REMOTE_CMD"
+# 4. Synchronize benchmark scripts to the loader VM
+echo "Synchronizing latest benchmark scripts to Loader-0..."
+scp -i "$KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no workloads/* ubuntu@"$FIRST_LOADER":/home/ubuntu/workloads/
+ssh -i "$KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ubuntu@"$FIRST_LOADER" "chmod +x /home/ubuntu/workloads/*.sh"
+
+# 5. Trigger the remote execution on Loader-0 over SSH
+echo "Connecting to Loader-0 and starting the automated benchmark..."
+ssh -i "$KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ubuntu@"$FIRST_LOADER" "$REMOTE_CMD"
