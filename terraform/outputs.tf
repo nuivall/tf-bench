@@ -44,21 +44,21 @@ output "ssh_loader_commands" {
 }
 
 output "benchmarking_quickstart_guide" {
-  description = "Quick commands to run inside any of the loaders after provisioning is complete (allow 2-3 mins for boot setup)"
+  description = "Quick commands to run the automated benchmark from your local machine once provisioning is complete (allow 2-3 mins for boot setup)"
   value       = <<EOF
 
 ========================================================================================
                           SCYLLA MULTI-AZ BENCHMARK QUICKSTART
 ========================================================================================
 
-1. SSH INTO LOADER-0:
+1. RUN THE ENTIRE AUTOMATED BENCHMARK PIPELINE (From your local machine's project root):
+   $ ./run_benchmark.sh
+
+   *(Optional)* Customize the duration (e.g., to run for 10 minutes instead of the default 5m):
+   $ ./run_benchmark.sh --duration 10m
+
+2. OR SSH INTO LOADER-0 DIRECTLY (If you want to run manual tests):
    $ ssh -i ${local_sensitive_file.private_key.filename} ubuntu@${aws_instance.loader[0].public_ip}
-
-2. RUN THE ENTIRE AUTOMATED BENCHMARK PIPELINE (Creates schema, loads rows, runs 50/50, and triggers storm):
-   $ ./workloads/run_benchmark.sh ${join(" ", aws_instance.scylla[*].private_ip)}
-
-   *(Optional)* Customize the duration (e.g., to run for 10 minutes instead of default 5 minutes):
-   $ ./workloads/run_benchmark.sh --duration 10m ${join(" ", aws_instance.scylla[*].private_ip)}
 
 3. ACCESS GRAFANA MONITORING TO ANALYZE REAL-TIME METRICS & LATENCY:
    URL: http://${aws_instance.monitoring.public_ip}:3000

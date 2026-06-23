@@ -3,12 +3,6 @@
 # This script handles the entire pipeline: schema initialization, loading, starting background connection storm, running mixed load, and cleaning up.
 set -e
 
-if [ "$#" -lt 1 ]; then
-    echo "Usage: $0 <scylla-node-ip-1> [scylla-node-ip-2] [scylla-node-ip-3] ..."
-    exit 1
-fi
-
-SCYLLA_IPS="$@"
 WORKLOAD_PATH="$HOME/workloads/workload.rn"
 STORM_PATH="$HOME/workloads/connect_storm.sh"
 DURATION="5m" # Default duration
@@ -17,8 +11,15 @@ DURATION="5m" # Default duration
 if [ "$1" == "--duration" ] || [ "$1" == "-d" ]; then
     DURATION="$2"
     shift 2
-    SCYLLA_IPS="$@"
 fi
+
+# Determine Scylla IPs
+if [ "$#" -lt 1 ]; then
+    echo "Error: No Scylla IPs provided."
+    echo "Usage: $0 [--duration <duration>] <scylla-node-ip-1> [scylla-node-ip-2] ..."
+    exit 1
+fi
+SCYLLA_IPS="$@"
 
 if [ ! -f "$WORKLOAD_PATH" ]; then
     WORKLOAD_PATH="./workload.rn"

@@ -3,10 +3,9 @@
 # This script launches parallel short-lived Latte commands to stress coordinator connections.
 
 if [ "$#" -lt 1 ]; then
-    echo "Usage: $0 <scylla-node-ip-1> [scylla-node-ip-2] [scylla-node-ip-3] ..."
+    echo "Usage: $0 <scylla-node-ip-1> [scylla-node-ip-2] ..."
     exit 1
 fi
-
 NODES="$@"
 WORKLOAD_PATH="$HOME/workloads/workload.rn"
 

@@ -44,52 +44,55 @@ Terraform will automatically generate a private SSH key file named `tf-scylla-be
 
 ## 📊 Run Benchmarks
 
-### Step 1: SSH into Loader-0
-Find your loader's public IP from the terraform output and connect:
+The benchmark execution is completely automated. Instead of copying IP addresses, you can trigger the entire benchmark pipeline directly from your **local machine**.
+
+### Option A: Local Automation (Recommended)
+We provide a local orchestrator script `run_benchmark.sh` in the root of the project. It automatically queries the active Terraform state for Scylla private IPs and Loader public IPs, establishes an SSH tunnel to Loader-0, and launches the entire benchmark suite.
+
+To run the automated benchmark with its **default duration of 5 minutes (`5m`)**:
 ```bash
-ssh -i terraform/tf-scylla-benchmark-key.pem ubuntu@<LOADER_PUBLIC_IP>
+./run_benchmark.sh
 ```
 
-### Option A: The Automated Way (Recommended)
-We have provided an automated wrapper script `run_benchmark.sh` that takes care of the entire execution pipeline in a single command:
-1. Initializes the keyspace and tables (replication factor of 3).
-2. Pre-populates the database with 1,000,000 rows of payload data.
-3. Automatically launches the connection storm generator in the background.
-4. Executes the steady-state 50/50 mixed read/write workload.
-5. Gracefully terminates and cleans up the connection storm upon completion.
-
-To run the automated script with its **default duration of 5 minutes (`5m`)**:
+To customize the steady-state duration (for example, to run for **10 minutes** instead):
 ```bash
-./workloads/run_benchmark.sh <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
+./run_benchmark.sh --duration 10m
 ```
 
-You can customize the steady-state duration (for example, to run for **10 minutes** instead):
-```bash
-./workloads/run_benchmark.sh --duration 10m <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
-```
+The script will automatically:
+1. Initialize the Scylla database schema (`latte schema`).
+2. Pre-populate the database with 1,000,000 rows (`latte load`).
+3. Launch our background connection storm generator (`connect_storm.sh`).
+4. Execute the steady-state 50/50 mixed read/write workload.
+5. Clean up and terminate the background connection storm upon completion.
 
 ---
 
-### Option B: The Manual Way (For Granular Control)
+### Option B: Manual VM-Level Execution (For Granular Control)
 
-If you prefer to run each stage manually:
+If you prefer to connect to the loader VMs and execute tasks step-by-step:
 
-1. **Initialize Database Schema:**
+1. **SSH into Loader-0:**
+   ```bash
+   ssh -i terraform/tf-scylla-benchmark-key.pem ubuntu@<LOADER_PUBLIC_IP>
+   ```
+
+2. **Initialize Database Schema:**
    ```bash
    latte schema workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
    ```
 
-2. **Pre-populate Database (Creates 1,000,000 rows):**
+3. **Pre-populate Database (Creates 1,000,000 rows):**
    ```bash
    latte run -f load -d 1000000 --threads 8 --concurrency 64 workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
    ```
 
-3. **Simulate a Connection Storm (Run in a separate terminal / background):**
+4. **Simulate a Connection Storm (Run in a separate terminal / background):**
    ```bash
    ./workloads/connect_storm.sh <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
    ```
 
-4. **Run Steady-State 50/50 Mixed Workload (reads: 50%, writes: 50%):**
+5. **Run Steady-State 50/50 Mixed Workload (reads: 50%, writes: 50%):**
    ```bash
    latte run -f read:0.5 -f write:0.5 -d 10m --threads 8 --concurrency 64 workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
    ```
