@@ -51,7 +51,7 @@ EOF
 
 # Write io.conf to bypass the slow 15-minute iotune benchmark
 cat <<EOF > /etc/scylla.d/io.conf
-SEASTAR_IO="--io-properties-file=/etc/scylla.d/io_properties.yaml --io-setup=0"
+SEASTAR_IO="--io-properties-file=/etc/scylla.d/io_properties.yaml"
 EOF
 
 # 3. Add ScyllaDB Repository and Install Scylla
