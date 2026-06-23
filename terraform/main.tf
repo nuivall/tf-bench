@@ -18,6 +18,12 @@ terraform {
 
 provider "aws" {
   region = var.aws_region
+  default_tags {
+    tags = {
+      Keep  = "3"
+      Owner = "marcinmal"
+    }
+  }
 }
 
 # 1. SSH Key Pair Generation
