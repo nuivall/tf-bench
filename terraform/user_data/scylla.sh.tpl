@@ -92,7 +92,7 @@ listen_address: $PRIVATE_IP
 broadcast_address: $PRIVATE_IP
 rpc_address: 0.0.0.0
 broadcast_rpc_address: $PRIVATE_IP
-endpoint_snitch: Ec2MultiRegionSnitch
+endpoint_snitch: Ec2Snitch
 api_address: 127.0.0.1
 developer_mode: false
 EOF
