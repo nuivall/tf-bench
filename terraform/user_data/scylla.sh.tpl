@@ -91,7 +91,7 @@ seed_provider:
 listen_address: $PRIVATE_IP
 rpc_address: 0.0.0.0
 broadcast_rpc_address: $PRIVATE_IP
-endpoint_snitch: GossipingPropertyFileSnitch
+endpoint_snitch: Ec2MultiRegionSnitch
 api_address: 127.0.0.1
 developer_mode: false
 EOF
