@@ -1,0 +1,61 @@
+//! Custom Latte workload script for 50/50 mixed read/write benchmark with ScyllaDB.
+
+const ROW_COUNT = latte::param!("rows", 1000000);
+const PAYLOAD_SIZE = latte::param!("payload_size", 128);
+
+const INSERT = "insert_stmt";
+const SELECT = "select_stmt";
+
+const KEYSPACE = "latte";
+const TABLE = "bench";
+
+// Schema definition: Create keyspace with RF=3 (appropriate for 3 multi-AZ nodes)
+pub async fn schema(ctx) {
+    ctx.execute(`CREATE KEYSPACE IF NOT EXISTS ${KEYSPACE} 
+                    WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 3 }`).await?;
+    ctx.execute(`DROP TABLE IF EXISTS ${KEYSPACE}.${TABLE}`).await?;
+    ctx.execute(`CREATE TABLE ${KEYSPACE}.${TABLE}(
+                    id bigint PRIMARY KEY,
+                    payload blob
+                 )`).await?;
+}
+
+// Truncate existing data
+pub async fn erase(ctx) {
+    ctx.execute(`TRUNCATE TABLE ${KEYSPACE}.${TABLE}`).await
+}
+
+// Prepare statements and set up load cycle counts
+pub async fn prepare(ctx) {
+    ctx.load_cycle_count = ROW_COUNT;
+    ctx.prepare(INSERT, `INSERT INTO ${KEYSPACE}.${TABLE}(id, payload) VALUES (?, ?)`).await?;
+    ctx.prepare(SELECT, `SELECT * FROM ${KEYSPACE}.${TABLE} WHERE id = ?`).await?;
+}
+
+// Data pre-population
+pub async fn load(ctx, i) {
+    let payload_data = latte::blob(i, PAYLOAD_SIZE);
+    ctx.execute_prepared(INSERT, [i, payload_data]).await?
+}
+
+// Dedicated write operation for mixed mode
+pub async fn write(ctx, i) {
+    let key = latte::hash(i) % ROW_COUNT;
+    let payload_data = latte::blob(i, PAYLOAD_SIZE);
+    ctx.execute_prepared(INSERT, [key, payload_data]).await?
+}
+
+// Dedicated read operation for mixed mode
+pub async fn read(ctx, i) {
+    let key = latte::hash(i) % ROW_COUNT;
+    ctx.execute_prepared(SELECT, [key]).await?
+}
+
+// Standard 50/50 mixed read/write loop if no function weights are provided in latte run
+pub async fn run(ctx, i) {
+    if latte::hash(i) % 2 == 0 {
+        read(ctx, i).await?
+    } else {
+        write(ctx, i).await?
+    }
+}
