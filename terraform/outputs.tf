@@ -54,19 +54,13 @@ output "benchmarking_quickstart_guide" {
 1. SSH INTO LOADER-0:
    $ ssh -i ${local_sensitive_file.private_key.filename} ubuntu@${aws_instance.loader[0].public_ip}
 
-2. INITIALIZE DATABASE SCHEMA (Creates keyspace & tables with Replication Factor = 3):
-   $ latte schema workloads/workload.rn ${join(" ", aws_instance.scylla[*].private_ip)}
+2. RUN THE ENTIRE AUTOMATED BENCHMARK PIPELINE (Creates schema, loads rows, runs 50/50, and triggers storm):
+   $ ./workloads/run_benchmark.sh ${join(" ", aws_instance.scylla[*].private_ip)}
 
-3. PRE-POPULATE 1,000,000 ROWS INTO THE DATABASE (Creates consistent dataset first):
-   $ latte run -f load -d 1000000 --threads 8 --concurrency 64 workloads/workload.rn ${join(" ", aws_instance.scylla[*].private_ip)}
+   *(Optional)* Customize the duration (e.g., to run for 10 minutes instead of default 5 minutes):
+   $ ./workloads/run_benchmark.sh --duration 10m ${join(" ", aws_instance.scylla[*].private_ip)}
 
-4. RUN STEADY-STATE 50/50 CONCURRENT MIXED WORKLOAD FOR 10 MINUTES:
-   $ latte run -f read:0.5 -f write:0.5 -d 10m --threads 8 --concurrency 64 workloads/workload.rn ${join(" ", aws_instance.scylla[*].private_ip)}
-
-5. SIMULATE A CONNECT STORM IN BACKGROUND (Run in another terminal on any Loader):
-   $ ./workloads/connect_storm.sh ${join(" ", aws_instance.scylla[*].private_ip)}
-
-6. ACCESS GRAFANA MONITORING TO ANALYZE REAL-TIME METRICS & LATENCY:
+3. ACCESS GRAFANA MONITORING TO ANALYZE REAL-TIME METRICS & LATENCY:
    URL: http://${aws_instance.monitoring.public_ip}:3000
 
 ========================================================================================

@@ -50,33 +50,49 @@ Find your loader's public IP from the terraform output and connect:
 ssh -i terraform/tf-scylla-benchmark-key.pem ubuntu@<LOADER_PUBLIC_IP>
 ```
 
-### Step 2: Initialize Database Schema
-Run Latte's schema creation routine to create the `latte` keyspace (replicated with a replication factor of 3 across the subnets) and the `bench` table:
+### Option A: The Automated Way (Recommended)
+We have provided an automated wrapper script `run_benchmark.sh` that takes care of the entire execution pipeline in a single command:
+1. Initializes the keyspace and tables (replication factor of 3).
+2. Pre-populates the database with 1,000,000 rows of payload data.
+3. Automatically launches the connection storm generator in the background.
+4. Executes the steady-state 50/50 mixed read/write workload.
+5. Gracefully terminates and cleans up the connection storm upon completion.
+
+To run the automated script with its **default duration of 5 minutes (`5m`)**:
 ```bash
-latte schema workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
+./workloads/run_benchmark.sh <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
 ```
 
-### Step 3: Pre-populate Database
-Load 1,000,000 rows into the table before performing reads or mixed tests. This ensures a consistent, representative dataset:
+You can customize the steady-state duration (for example, to run for **10 minutes** instead):
 ```bash
-latte run -f load -d 1000000 --threads 8 --concurrency 64 workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
+./workloads/run_benchmark.sh --duration 10m <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
 ```
 
-### Step 4: Run Steady-State 50/50 Mixed Workload
-Execute a 50/50 mix ofpoint reads and point writes. Latte will concurrently schedule 50% reads and 50% writes and log their latency percentiles and throughput separately:
-```bash
-latte run -f read:0.5 -f write:0.5 -d 10m --threads 8 --concurrency 64 workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
-```
-* **`threads`**: Maps to client-side runner cores.
-* **`concurrency`**: Defines active concurrent asynchronous queries per thread.
-* **`d 10m`**: Runs the benchmark for 10 minutes.
+---
 
-### Step 5: Simulate a Connection Storm
-A client-driver maintains persistent connection pools. To test how Scylla handles a massive scale-up or server reboot connection storm, run our custom storm generator in another terminal (or background it):
-```bash
-./workloads/connect_storm.sh <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
-```
-This script constantly loops and spawns multiple short-lived concurrent `latte run` commands, flooding the Scylla coordinators with up to **2,500 connections per second** to establish, authenticate, point-query, and drop.
+### Option B: The Manual Way (For Granular Control)
+
+If you prefer to run each stage manually:
+
+1. **Initialize Database Schema:**
+   ```bash
+   latte schema workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
+   ```
+
+2. **Pre-populate Database (Creates 1,000,000 rows):**
+   ```bash
+   latte run -f load -d 1000000 --threads 8 --concurrency 64 workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
+   ```
+
+3. **Simulate a Connection Storm (Run in a separate terminal / background):**
+   ```bash
+   ./workloads/connect_storm.sh <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
+   ```
+
+4. **Run Steady-State 50/50 Mixed Workload (reads: 50%, writes: 50%):**
+   ```bash
+   latte run -f read:0.5 -f write:0.5 -d 10m --threads 8 --concurrency 64 workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
+   ```
 
 ---
 

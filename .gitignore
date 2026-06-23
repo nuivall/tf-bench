@@ -1,0 +1,9 @@
+# Terraform local files
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+
+# Private keys / credentials
+*.pem
+*.key

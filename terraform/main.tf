@@ -290,6 +290,7 @@ resource "aws_instance" "loader" {
   user_data = templatefile("${path.module}/user_data/loader.sh.tpl", {
     workload_rn_content   = file("${path.module}/../workloads/workload.rn")
     connect_storm_content = file("${path.module}/../workloads/connect_storm.sh")
+    run_benchmark_content = file("${path.module}/../workloads/run_benchmark.sh")
   })
 
   tags = {

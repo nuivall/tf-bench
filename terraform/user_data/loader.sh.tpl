@@ -34,8 +34,14 @@ cat <<'EOF' > /home/ubuntu/workloads/connect_storm.sh
 ${connect_storm_content}
 EOF
 
+# Write workloads/run_benchmark.sh to loader
+cat <<'EOF' > /home/ubuntu/workloads/run_benchmark.sh
+${run_benchmark_content}
+EOF
+
 # Make script executable and fix ownership
 chmod +x /home/ubuntu/workloads/connect_storm.sh
+chmod +x /home/ubuntu/workloads/run_benchmark.sh
 chown -R ubuntu:ubuntu /home/ubuntu/workloads
 
 echo "========================================="
