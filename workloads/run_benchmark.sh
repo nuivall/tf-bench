@@ -42,10 +42,10 @@ latte schema "$WORKLOAD_PATH" $SCYLLA_IPS
 echo -e "\n[2/4] Pre-populating 1,000,000 rows (latte load)..."
 latte run -f load -d 1000000 --threads 8 --concurrency 64 "$WORKLOAD_PATH" $SCYLLA_IPS
 
-echo -e "\n[3/4] Launching background Connection Storm..."
+echo -e "\n[3/4] Launching background Connection Storm (delayed by 120s to capture baseline)..."
 "$STORM_PATH" $SCYLLA_IPS > /dev/null 2>&1 &
 STORM_PID=$!
-echo "Connection storm is active (PID: $STORM_PID)."
+echo "Connection storm background process started (PID: $STORM_PID)."
 
 echo -e "\n[4/4] Starting steady-state 50/50 Mixed Read/Write load..."
 latte run -f read:0.5 -f write:0.5 -d "$DURATION" --threads 8 --concurrency 64 "$WORKLOAD_PATH" $SCYLLA_IPS

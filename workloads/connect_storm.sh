@@ -16,8 +16,14 @@ fi
 
 echo "========================================================================="
 echo " WARNING: Starting connection storm against nodes: $NODES"
-echo " Spawning parallel transient connection sessions..."
+echo " Delaying storm start by 120 seconds to establish baseline..."
 echo " Press [CTRL+C] to stop."
+echo "========================================================================="
+
+sleep 120
+
+echo "========================================================================="
+echo " STORM TRIGGERED! Starting parallel transient connection sessions..."
 echo "========================================================================="
 
 while true; do
