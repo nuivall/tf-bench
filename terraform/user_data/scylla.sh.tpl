@@ -89,6 +89,7 @@ seed_provider:
       parameters:
           - seeds: '${seed_ip}'
 listen_address: $PRIVATE_IP
+broadcast_address: $PRIVATE_IP
 rpc_address: 0.0.0.0
 broadcast_rpc_address: $PRIVATE_IP
 endpoint_snitch: Ec2MultiRegionSnitch
