@@ -164,12 +164,30 @@ if [ "$DO_LOAD" = "1" ] && [ -n "$SNAPSHOT_DATA_DIR" ]; then
         echo "       Load it manually with:  cd <scylla-monitoring> && ./start-all.sh --archive '$SNAPSHOT_DATA_DIR'" >&2
         exit 1
     fi
+
+    # A previous local stack (aprom/agraf/... containers) would make start-all.sh
+    # abort with "Some of the monitoring docker instances (aprom) exist". Tear any
+    # existing local stack down first. This is best-effort: on a clean machine
+    # kill-all.sh simply finds nothing to remove.
+    echo "Clearing any existing local monitoring stack (kill-all.sh)..."
+    ( cd "$MONITORING_DIR" && ./kill-all.sh >/dev/null 2>&1 ) || true
+
     echo "Starting local monitoring stack against snapshot:"
     echo "   $MONITORING_DIR/start-all.sh --archive '$SNAPSHOT_DATA_DIR'"
-    ( cd "$MONITORING_DIR" && ./start-all.sh --archive "$SNAPSHOT_DATA_DIR" )
-    echo ""
-    banner "DONE — snapshot loaded. Open Grafana at http://localhost:3000"
-    echo "To stop the local stack later:  ( cd '$MONITORING_DIR' && ./kill-all.sh )"
+    if ( cd "$MONITORING_DIR" && ./start-all.sh --archive "$SNAPSHOT_DATA_DIR" ); then
+        echo ""
+        banner "DONE — snapshot loaded. Open Grafana at http://localhost:3000"
+        echo "To stop the local stack later:  ( cd '$MONITORING_DIR' && ./kill-all.sh )"
+    else
+        echo ""
+        echo "ERROR: the local monitoring stack failed to start." >&2
+        echo "       Extracted snapshot is at: $SNAPSHOT_DATA_DIR" >&2
+        echo "       Try manually:" >&2
+        echo "         cd '$MONITORING_DIR'" >&2
+        echo "         ./kill-all.sh" >&2
+        echo "         ./start-all.sh --archive '$SNAPSHOT_DATA_DIR'" >&2
+        exit 1
+    fi
 elif [ "$DO_LOAD" = "1" ]; then
     echo "No snapshot was captured; skipping local load."
 else
