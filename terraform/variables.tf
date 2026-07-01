@@ -17,9 +17,9 @@ variable "scylla_instance_type" {
 }
 
 variable "loader_count" {
-  description = "Number of distributed Latte loader nodes to provision"
+  description = "Number of distributed Latte loader nodes to provision. More nodes = more independent ephemeral-port pools, file-descriptor budgets, and source IPs, which is the main lever for high new-connection-per-second floods."
   type        = number
-  default     = 3
+  default     = 12
 }
 
 variable "loader_instance_type" {
@@ -35,9 +35,9 @@ variable "monitoring_instance_type" {
 }
 
 variable "scylla_version" {
-  description = "ScyllaDB version to install (major.minor format)"
+  description = "ScyllaDB version to install and matching Grafana dashboard set (e.g. 2026.2, 2026.1, 6.0)"
   type        = string
-  default     = "6.0"
+  default     = "2026.2"
 }
 
 variable "trusted_cidr" {

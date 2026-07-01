@@ -7,3 +7,10 @@
 # Private keys / credentials
 *.pem
 *.key
+
+# Downloaded monitoring snapshots (Prometheus TSDB tarballs + extracted data)
+snapshots/
+
+# Python bytecode (connect_storm.py)
+__pycache__/
+*.pyc

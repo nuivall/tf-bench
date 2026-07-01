@@ -103,6 +103,15 @@ systemctl daemon-reload
 systemctl enable scylla-server
 systemctl restart scylla-server
 
+# 5b. Enable and start the Prometheus node_exporter.
+# The scylla-node-exporter package is installed as a dependency of the scylla
+# meta-package but ships DISABLED by default. Without it, port 9100 is closed
+# and the Scylla Monitoring OS dashboards (CPU, memory, disk, network) stay
+# empty / show 0. It listens on 0.0.0.0:9100 by default, which the cluster
+# security group already allows within the VPC.
+echo "Enabling Prometheus node_exporter for OS-level metrics..."
+systemctl enable --now scylla-node-exporter
+
 echo "========================================="
 echo " ScyllaDB Node fully provisioned!"
 echo "========================================="

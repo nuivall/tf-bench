@@ -62,9 +62,12 @@ To customize the steady-state duration (for example, to run for **10 minutes** i
 The script will automatically:
 1. Initialize the Scylla database schema (`latte schema`).
 2. Pre-populate the database with 1,000,000 rows (`latte load`).
-3. Launch our background connection storm generator (`connect_storm.sh`).
-4. Execute the steady-state 50/50 mixed read/write workload.
-5. Clean up and terminate the background connection storm upon completion.
+3. Split the loader fleet into two separate groups: **traffic loaders** run only
+   the steady-state 50/50 workload, while **storm loaders** run only the
+   dedicated connection storm generator (`connect_storm.py`).
+4. Execute the steady-state 50/50 mixed read/write workload on the traffic loaders.
+5. After `--flood-delay`, trigger the connection storm on the storm loaders for
+   `--flood-duration`, then clean up on completion.
 
 ---
 
@@ -89,7 +92,7 @@ If you prefer to connect to the loader VMs and execute tasks step-by-step:
 
 4. **Simulate a Connection Storm (Run in a separate terminal / background):**
    ```bash
-   ./workloads/connect_storm.sh <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
+   python3 ./workloads/connect_storm.py --duration 120s --rate 40 --hold 2s <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
    ```
 
 5. **Run Steady-State 50/50 Mixed Workload (reads: 50%, writes: 50%):**
@@ -112,6 +115,75 @@ The official Scylla Monitoring Stack is fully functional on the Monitoring node.
    * **CPU utilization per Shard** (Scylla's share-nothing asynchronous executor).
    * **CQL Connection count** (watch this spike under connection storm tests).
    * I/O queue delays, disk writes/reads, and compaction rates.
+
+---
+
+## 📸 Download a Monitoring Snapshot
+
+You can capture the monitoring node's **Prometheus time-series database** (all raw
+metrics from the run) and analyze it offline — even after the cluster is torn
+down. Snapshots are downloaded to `./snapshots/<timestamp>/prometheus_data/`.
+
+Capture a snapshot at any time (infra must be up):
+```bash
+./fetch_snapshot.sh
+```
+
+Or capture automatically right after a benchmark run:
+```bash
+./run_benchmark.sh --snapshot
+```
+
+Under the hood `fetch_snapshot.sh` SSHes to the monitoring node, gracefully stops
+the Prometheus container (flushing the head block + WAL to disk), `tar`s
+`/var/lib/prometheus`, restarts Prometheus, then downloads and extracts the
+archive locally.
+
+### Load a snapshot locally
+
+The snapshot is loaded with the official Scylla Monitoring stack in **archive
+mode** (infinite retention, reads the ScyllaDB version from the bundled
+`scylla.txt`):
+```bash
+cd /code/scylladb/scylla-monitoring
+./start-all.sh --archive /path/to/snapshots/<timestamp>/prometheus_data
+```
+Then open Grafana at `http://localhost:3000`. Stop it later with `./kill-all.sh`.
+
+---
+
+## 🔁 Full Automated Pipeline
+
+`run_full_benchmark.sh` runs the **entire lifecycle** with one command:
+
+1. `terraform apply` — provision the cluster, loaders, and monitoring node.
+2. Wait for the loaders and monitoring node to finish cloud-init.
+3. Run the benchmark (traffic loaders + connection-storm loaders).
+4. Fetch the Prometheus snapshot from the monitoring node.
+5. `terraform destroy` — **always** torn down, even if the benchmark or snapshot
+   step failed (teardown runs from a shell trap so AWS resources are never left
+   running).
+6. Load the snapshot into a **local** Scylla Monitoring stack so you can browse
+   the exact dashboards offline after the infra is gone.
+
+```bash
+# Defaults: local monitoring repo at /code/scylladb/scylla-monitoring
+./run_full_benchmark.sh
+
+# Forward benchmark options after a literal `--`:
+./run_full_benchmark.sh -- --duration 3m --steady-loaders 2 --storm-rate 30
+
+# Restrict access to your IP, use a different monitoring checkout, skip local load:
+./run_full_benchmark.sh \
+    --tf-var "trusted_cidr=$(curl -s https://checkip.amazonaws.com)/32" \
+    --monitoring-dir /path/to/scylla-monitoring \
+    --no-load \
+    -- --duration 5m
+```
+
+> ⚠️ Because teardown is unconditional, don't rely on the cluster still being up
+> after this script finishes. Use `./run_benchmark.sh` directly if you want the
+> infrastructure to persist for manual inspection.
 
 ---
 

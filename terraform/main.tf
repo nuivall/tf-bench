@@ -287,10 +287,12 @@ resource "aws_instance" "loader" {
   vpc_security_group_ids = [aws_security_group.loader.id]
   key_name               = aws_key_pair.key_pair.key_name
 
+  # user_data has a hard 16 KB limit; gzip+base64-compress the embedded
+  # workload files (decoded back on the loader in loader.sh.tpl).
   user_data = templatefile("${path.module}/user_data/loader.sh.tpl", {
-    workload_rn_content   = file("${path.module}/../workloads/workload.rn")
-    connect_storm_content = file("${path.module}/../workloads/connect_storm.sh")
-    run_benchmark_content = file("${path.module}/../workloads/run_benchmark.sh")
+    workload_rn_content   = base64gzip(file("${path.module}/../workloads/workload.rn"))
+    connect_storm_content = base64gzip(file("${path.module}/../workloads/connect_storm.py"))
+    run_benchmark_content = base64gzip(file("${path.module}/../workloads/run_benchmark.sh"))
   })
 
   tags = {
