@@ -117,6 +117,7 @@ fi
 
 echo "Querying cluster details from Terraform state..."
 SCYLLA_IPS=$(terraform -chdir="$TF_DIR" output -json scylla_node_private_ips | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | tr '\n' ' ')
+SCYLLA_PUBLIC_IPS=$(terraform -chdir="$TF_DIR" output -json scylla_node_public_ips | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | tr '\n' ' ')
 mapfile -t LOADER_ARRAY < <(terraform -chdir="$TF_DIR" output -json loader_node_public_ips | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
 MONITOR_IP=$(terraform -chdir="$TF_DIR" output -raw monitoring_node_public_ip 2>/dev/null || true)
 
@@ -487,7 +488,55 @@ fi
 [ -n "$MONITOR_IP" ] && echo " View metrics: http://$MONITOR_IP:3000"
 echo "========================================================================="
 
-# ---- 4. Optionally download a Prometheus monitoring snapshot -----------------
+# ---- 4. Download benchmark and system logs from all nodes --------------------
+echo ""
+echo "========================================================================="
+echo " Downloading benchmark and system logs from all nodes..."
+echo "========================================================================="
+LOGS_DIR="./logs"
+mkdir -p "$LOGS_DIR"
+
+# Download in parallel from loaders
+for idx in "${!LOADER_ARRAY[@]}"; do
+    ip="${LOADER_ARRAY[$idx]}"
+    (
+        loader_dir="$LOGS_DIR/loader-${idx}-${ip}"
+        mkdir -p "$loader_dir"
+        echo "  [logs] Loader #$idx ($ip): bundling and downloading logs..."
+        
+        # Tar logs remotely
+        ssh "${SSH_OPTS[@]}" ubuntu@"$ip" "tar -czf /tmp/logs.tar.gz -C \$HOME . 2>/dev/null --include='*.log' || tar -czf /tmp/logs.tar.gz -C \$HOME \$(ls *.log 2>/dev/null) 2>/dev/null || true" >/dev/null 2>&1
+        
+        # Download and extract if tarball exists
+        if scp "${SSH_OPTS[@]}" ubuntu@"$ip":/tmp/logs.tar.gz "$loader_dir/logs.tar.gz" >/dev/null 2>&1; then
+            ( cd "$loader_dir" && tar -xzf logs.tar.gz && rm -f logs.tar.gz ) >/dev/null 2>&1
+        fi
+        
+        # Clean up remote tmp file
+        ssh "${SSH_OPTS[@]}" ubuntu@"$ip" "rm -f /tmp/logs.tar.gz" >/dev/null 2>&1
+    ) &
+done
+
+# Download in parallel from Scylla nodes
+read -r -a SCYLLA_PUB_ARRAY <<< "$SCYLLA_PUBLIC_IPS"
+for s_idx in "${!SCYLLA_PUB_ARRAY[@]}"; do
+    s_ip="${SCYLLA_PUB_ARRAY[$s_idx]}"
+    (
+        echo "  [logs] Scylla Node #$s_idx ($s_ip): dumping and downloading system logs..."
+        # Dump scylla-server logs
+        ssh "${SSH_OPTS[@]}" ubuntu@"$s_ip" "sudo journalctl -u scylla-server --no-pager > /tmp/scylla-journal.log" >/dev/null 2>&1 || true
+        # Download
+        scp "${SSH_OPTS[@]}" ubuntu@"$s_ip":/tmp/scylla-journal.log "$LOGS_DIR/scylla-${s_idx}-${s_ip}-journal.log" >/dev/null 2>&1 || true
+        # Cleanup remote tmp file
+        ssh "${SSH_OPTS[@]}" ubuntu@"$s_ip" "rm -f /tmp/scylla-journal.log" >/dev/null 2>&1 || true
+    ) &
+done
+
+wait
+echo "Logs download complete. Saved to: $LOGS_DIR"
+echo "========================================================================="
+
+# ---- 5. Optionally download a Prometheus monitoring snapshot -----------------
 if [ "$SNAPSHOT" = "1" ]; then
     echo ""
     echo "Downloading monitoring snapshot..."
