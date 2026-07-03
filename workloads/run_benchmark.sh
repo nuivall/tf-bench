@@ -43,7 +43,7 @@ STORM_HOLD="2s"         # storm: how long each session is held before closing
 THREADS="8"             # steady-load latte -t
 CONCURRENCY="64"        # steady-load latte -p (in-flight request CAP per thread).
                         # Does NOT throttle throughput; use --rate for that.
-RATE="18000"            # steady-load latte -r (cycles/s = ops/s) for THIS loader.
+RATE="12600"            # steady-load latte -r (cycles/s = ops/s) for THIS loader.
                         # This is the precise throughput throttle. 0 = unthrottled.
 CONNECTIONS=""          # steady-load latte -c (connections per shard); blank = latte default
 DO_SCHEMA="0"           # whether this loader (re)creates schema + loads data

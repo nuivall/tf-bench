@@ -53,9 +53,10 @@ CONCURRENCY="64"       # steady-load in-flight request CAP per thread (latte -p)
                        # This does NOT throttle throughput (with cheap cache-hit
                        # reads latte runs as-fast-as-possible up to this cap); use
                        # --steady-rate to actually set ops/s.
-STEADY_RATE="36000"    # TOTAL target ops/s across all steady loaders (latte -r,
-                       # closed-loop rate limit). ~36k total => ~18k reads + ~18k
-                       # writes. This is the real throughput knob. 0 = unthrottled.
+STEADY_RATE="25200"    # TOTAL target ops/s across all steady loaders (latte -r,
+                       # closed-loop rate limit). ~25.2k total => ~12.6k reads +
+                       # ~12.6k writes. This is the real throughput knob.
+                       # 0 = unthrottled.
 CONNECTIONS=""         # steady-load connections per shard (latte -c); blank=default
 SCYLLA_USER="cassandra"     # CQL auth user (cluster runs PasswordAuthenticator)
 SCYLLA_PASSWORD="cassandra" # CQL auth password
