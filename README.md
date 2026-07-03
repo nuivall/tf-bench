@@ -63,7 +63,7 @@ To customize the steady-state duration (for example, to run for **20 minutes** i
 
 Throughput is throttled with Latte's `--rate` for a stable, repeatable load.
 `--steady-rate` sets the **total** steady ops/s across all steady loaders
-(default `25200` ≈ 12.6k reads + 12.6k writes), which the orchestrator splits evenly
+(default `14000` ≈ 7k reads + 7k writes), which the orchestrator splits evenly
 per steady loader. `--concurrency` only **caps** in-flight requests; it does *not*
 limit throughput on cheap cache-hit reads, so use `--steady-rate` to control load:
 ```bash
@@ -122,10 +122,10 @@ If you prefer to connect to the loader VMs and execute tasks step-by-step:
 5. **Run Steady-State 50/50 Mixed Workload (reads: 50%, writes: 50%):**
    > `-q` hides the progress bar and `-s 100000s` (a sampling period longer than
    > the run) suppresses the per-second statistics rows, leaving only the final
-   > report. `-r` throttles throughput to a steady ops/s (here 12,600 ≈ 6.3k reads
-   > + 6.3k writes for this single loader).
+   > report. `-r` throttles throughput to a steady ops/s (here 7,000 ≈ 3.5k reads
+   > + 3.5k writes for this single loader).
    ```bash
-   latte run -q -s 100000s --user cassandra --password cassandra -f read:0.5 -f write:0.5 -d 5m --threads 8 --concurrency 64 -r 12600 workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
+   latte run -q -s 100000s --user cassandra --password cassandra -f read:0.5 -f write:0.5 -d 5m --threads 8 --concurrency 64 -r 7000 workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
    ```
 
 ---
