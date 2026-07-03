@@ -120,23 +120,30 @@ try:
         # Convert to local and UTC strings
         dt_utc = datetime.fromtimestamp(epoch, tz=timezone.utc)
         dt_local = datetime.fromtimestamp(epoch)
-        return f"{dt_utc.strftime(\"%Y-%m-%d %H:%M:%S UTC\")} ({dt_local.strftime(\"%H:%M:%S Local\")})"
+        fmt_u = "%Y-%m-%d %H:%M:%S UTC"
+        fmt_l = "%H:%M:%S Local"
+        return f"{dt_utc.strftime(fmt_u)} ({dt_local.strftime(fmt_l)})"
+
+    load_start = data.get("load_start")
+    load_end = data.get("load_end")
+    storm_start = data.get("storm_start")
+    storm_end = data.get("storm_end")
 
     print("\n" + "="*73)
     print(" BENCHMARK TIME FRAMES (excluding schema preparation)")
     print("="*73)
-    if data.get("storm_only") or not data.get("load_start"):
+    if data.get("storm_only") or not load_start:
         print("  a) Load (steady-state traffic):  N/A (storm-only mode)")
     else:
         print(f"  a) Load (steady-state traffic):")
-        print(f"     Start: {fmt_time(data[\"load_start\"])}")
-        print(f"     End:   {fmt_time(data[\"load_end\"])}")
-        print(f"     Duration: {data[\"load_end\"] - data[\"load_start\"]} seconds")
+        print(f"     Start: {fmt_time(load_start)}")
+        print(f"     End:   {fmt_time(load_end)}")
+        print(f"     Duration: {load_end - load_start} seconds")
     
     print(f"  b) Storm (connection storm):")
-    print(f"     Start: {fmt_time(data[\"storm_start\"])}")
-    print(f"     End:   {fmt_time(data[\"storm_end\"])}")
-    print(f"     Duration: {data[\"storm_end\"] - data[\"storm_start\"]} seconds")
+    print(f"     Start: {fmt_time(storm_start)}")
+    print(f"     End:   {fmt_time(storm_end)}")
+    print(f"     Duration: {storm_end - storm_start} seconds")
     print("="*73 + "\n")
 except Exception as e:
     print("WARNING: could not print time frames:", e)
