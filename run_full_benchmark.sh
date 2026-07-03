@@ -262,6 +262,10 @@ if SNAP_OUT="$("$SCRIPT_DIR/fetch_snapshot.sh" --out-dir "$SNAPSHOT_DIR")"; then
     SNAPSHOT_DATA_DIR="$(printf '%s\n' "$SNAP_OUT" | tail -n1)"
     if [ -d "$SNAPSHOT_DATA_DIR" ]; then
         SNAPSHOT_DATA_DIR="$(cd "$SNAPSHOT_DATA_DIR" && pwd)"
+        # Copy the current run's timestamps into the snapshot folder for permanent record
+        if [ -f "$SCRIPT_DIR/workload_timestamps.json" ]; then
+            cp "$SCRIPT_DIR/workload_timestamps.json" "$(dirname "$SNAPSHOT_DATA_DIR")/" >/dev/null 2>&1 || true
+        fi
     else
         echo "WARNING: reported snapshot dir '$SNAPSHOT_DATA_DIR' does not exist." >&2
         SNAPSHOT_DATA_DIR=""

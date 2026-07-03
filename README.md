@@ -81,6 +81,22 @@ terraform destroy
 
 ---
 
+## 📂 Interactive Local Snapshot Loader
+
+To view any previously captured Prometheus metrics snapshot, we provide an interactive loading utility `./load_snapshot.sh`.
+
+```bash
+./load_snapshot.sh
+```
+
+**What it does:**
+1. Scans your local `./snapshots/` directory and displays all available runs as an interactive menu.
+2. Gracefully stops any active containers, then boots the local Scylla Monitoring Stack (`/code/scylladb/scylla-monitoring`) in `--archive` mode pointing to your chosen snapshot.
+3. Automatically locates and reads the snapshot's companion `workload_timestamps.json` file.
+4. Updates Grafana to focus the time view range exactly around that specific run window and sets up the dashboard.
+
+---
+
 ## 📊 Command-Line Customization
 
 Both scripts accept optional flags to customize the benchmark run parameters. Pass them directly to `run_benchmark.sh`, or append them after a literal `--` in `run_full_benchmark.sh`:
