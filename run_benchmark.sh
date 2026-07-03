@@ -310,19 +310,19 @@ echo "Sync complete."
 # the real load. So abort here rather than continue into a "storm-only" run.
 #
 # In STORM-ONLY mode (--storm-only) there is no steady load, so this prerequisite is
-# skipped entirely: no schema is created and no data is pre-populated.
+# skipped entirely: no schema is created.
 if [ "$STORM_ONLY" = "1" ]; then
-    echo "STORM-ONLY mode (--storm-only): skipping schema + data pre-population."
+    echo "STORM-ONLY mode (--storm-only): skipping schema initialization."
 else
     LOADER0="${LOADER_ARRAY[0]}"
-    echo "Preparing schema + loading data on loader #0 ($LOADER0)..."
+    echo "Initializing schema on loader #0 ($LOADER0)..."
     if ! ssh "${SSH_OPTS[@]}" ubuntu@"$LOADER0" \
         "/home/ubuntu/workloads/run_benchmark.sh --role load --schema \
             --duration 1s --flood-delay 0s --flood-duration 0s \
             --user '$SCYLLA_USER' --password '$SCYLLA_PASSWORD' \
             $SCYLLA_IPS" 2>&1 | sed "s/^/  [loader0-prep] /"; then
         echo "========================================================================="
-        echo " ERROR: schema + data load FAILED on loader #0 ($LOADER0)."
+        echo " ERROR: schema initialization FAILED on loader #0 ($LOADER0)."
         echo "        The latte keyspace/table was not prepared, so the steady load"
         echo "        would generate no traffic. Aborting BEFORE the connection storm."
         echo "        Inspect the failure with:"
@@ -330,13 +330,14 @@ else
         echo "========================================================================="
         exit 1
     fi
-    echo "Schema + data load done."
+    echo "Schema initialization done."
 fi
 
 # ---- 3. Launch all loaders in parallel with their assigned roles -------------
 echo "========================================================================="
 echo " Launching workload across $NUM_LOADERS loaders (Ctrl+C to abort)..."
 echo "========================================================================="
+WORKLOAD_START_EPOCH=$(date +%s)
 PIDS=()
 for idx in "${!LOADER_ARRAY[@]}"; do
     ip="${LOADER_ARRAY[$idx]}"
@@ -425,6 +426,45 @@ for pid in "${PIDS[@]}"; do
         FAIL=1
     fi
 done
+
+WORKLOAD_END_EPOCH=$(date +%s)
+
+# Compute load and storm phase intervals
+_flood_delay_s=$(to_secs "$FLOOD_DELAY")
+_flood_dur_s=$(to_secs "$FLOOD_DURATION")
+
+if [ "$STORM_ONLY" = "1" ]; then
+    load_start=0
+    load_end=0
+    storm_start="$WORKLOAD_START_EPOCH"
+    storm_end=$(( WORKLOAD_START_EPOCH + _flood_dur_s ))
+else
+    load_start="$WORKLOAD_START_EPOCH"
+    load_end=$(( WORKLOAD_START_EPOCH + _dur_s ))
+    storm_start=$(( WORKLOAD_START_EPOCH + _flood_delay_s ))
+    storm_end=$(( storm_start + _flood_dur_s ))
+fi
+
+# Cap endpoints at actual workload end
+[ "$load_end" -gt "$WORKLOAD_END_EPOCH" ] && load_end="$WORKLOAD_END_EPOCH"
+[ "$storm_start" -gt "$WORKLOAD_END_EPOCH" ] && storm_start="$WORKLOAD_END_EPOCH"
+[ "$storm_end" -gt "$WORKLOAD_END_EPOCH" ] && storm_end="$WORKLOAD_END_EPOCH"
+
+# Create a clean workload_timestamps.json using python3
+python3 -c "
+import json
+data = {
+    'workload_start': $WORKLOAD_START_EPOCH,
+    'workload_end': $WORKLOAD_END_EPOCH,
+    'load_start': $load_start,
+    'load_end': $load_end,
+    'storm_start': $storm_start,
+    'storm_end': $storm_end,
+    'storm_only': $STORM_ONLY
+}
+with open('workload_timestamps.json', 'w') as f:
+    json.dump(data, f, indent=2)
+" 2>/dev/null || true
 
 # Workload done — cancel the watchdog and stop the ticker so neither can keep
 # running (or printing) after we move on. stop_bg_helpers is idempotent and is

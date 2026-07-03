@@ -140,25 +140,16 @@ QUIET_ARG="-q -s 100000s"
 # is already --concurrency).
 AUTH_ARG="--user $SCYLLA_USER --password $SCYLLA_PASSWORD"
 
-# Optional: one designated loader prepares schema + pre-populates data.
-# This is a PREREQUISITE for every other loader: without the schema and the
-# pre-populated `latte.bench` table, the steady 50/50 workload has nothing to
-# read/write and silently generates zero benchmark traffic. So if either the
-# schema or the data load fails, abort here (non-zero) instead of proceeding —
-# otherwise the run degrades into a "storm-only" benchmark that still LOOKS busy
-# (the connection storm pins the reactor) while the real load never ran.
+# Optional: one designated loader prepares schema.
+# This is a PREREQUISITE for every other loader: without the keyspace and the
+# `latte.bench` table, the steady 50/50 workload has nothing to read/write. So
+# if the schema initialization fails, abort here (non-zero).
 if [ "$DO_SCHEMA" = "1" ]; then
     banner "[schema] Initializing schema..."
     if ! run_latte latte schema $AUTH_ARG "$WORKLOAD_PATH" $SCYLLA_IPS; then
         banner "[schema] FATAL: schema creation failed — aborting (see $LATTE_LOG)."
         exit 1
     fi
-    banner "[load] Pre-populating 1,000,000 rows..."
-    if ! run_latte latte run $QUIET_ARG $AUTH_ARG -f load -d 1000000 --threads 8 --concurrency 64 "$WORKLOAD_PATH" $SCYLLA_IPS; then
-        banner "[load] FATAL: data pre-population failed — aborting (see $LATTE_LOG)."
-        exit 1
-    fi
-    banner "[load] Data load complete."
 fi
 
 # --- Launch the connection storm in the background (flood / both roles) -------

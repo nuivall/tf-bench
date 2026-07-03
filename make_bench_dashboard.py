@@ -160,7 +160,7 @@ def build_panel(panel_id, title, expr, unit, description, ds_uid, x, y):
     }
 
 
-def build_dashboard(ds_uid):
+def build_dashboard(ds_uid, time_from=None, time_to=None):
     panels = []
     for i, (title, expr, unit, desc) in enumerate(PANELS):
         x = (i % COLS) * PANEL_W
@@ -173,7 +173,7 @@ def build_dashboard(ds_uid):
         "timezone": "browser",
         "schemaVersion": 42,
         "refresh": "",
-        "time": {"from": "now-1h", "to": "now"},
+        "time": {"from": time_from or "now-1h", "to": time_to or "now"},
         "panels": panels,
     }
 
@@ -205,6 +205,79 @@ def upload(dashboard, grafana_url, user, password):
     return body
 
 
+def post_annotation(grafana_url, user, password, time_ms, time_end_ms, text, tags):
+    payload = {
+        "dashboardUID": DASH_UID,
+        "time": time_ms,
+        "timeEnd": time_end_ms,
+        "tags": tags,
+        "text": text
+    }
+    data = json.dumps(payload).encode()
+    url = grafana_url.rstrip("/") + "/api/annotations"
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    if user:
+        import base64
+        token = base64.b64encode(f"{user}:{password}".encode()).decode()
+        req.add_header("Authorization", f"Basic {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
+    except Exception as e:
+        sys.stderr.write(f"WARNING: failed to post annotation '{text}': {e}\n")
+
+
+def delete_annotations(grafana_url, user, password):
+    # Query existing annotations for this dashboard to prevent duplicate markings on re-runs.
+    url = grafana_url.rstrip("/") + f"/api/annotations?dashboardUID={DASH_UID}"
+    req = urllib.request.Request(url, method="GET")
+    token = None
+    if user:
+        import base64
+        token = base64.b64encode(f"{user}:{password}".encode()).decode()
+        req.add_header("Authorization", f"Basic {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            annos = json.loads(resp.read().decode())
+        for anno in annos:
+            anno_id = anno.get("id")
+            if anno_id:
+                del_url = grafana_url.rstrip("/") + f"/api/annotations/{anno_id}"
+                del_req = urllib.request.Request(del_url, method="DELETE")
+                if token:
+                    del_req.add_header("Authorization", f"Basic {token}")
+                with urllib.request.urlopen(del_req, timeout=10) as del_resp:
+                    del_resp.read()
+    except Exception as e:
+        sys.stderr.write(f"WARNING: failed to clear old annotations: {e}\n")
+
+
+def create_annotations(grafana_url, user, password, ts_data):
+    # First, clear any existing annotations for this dashboard to prevent duplicates.
+    delete_annotations(grafana_url, user, password)
+
+    # Annotation 1: Steady Load
+    if not ts_data.get("storm_only") and ts_data.get("load_start") and ts_data.get("load_end"):
+        post_annotation(
+            grafana_url, user, password,
+            ts_data["load_start"] * 1000,
+            ts_data["load_end"] * 1000,
+            "Steady Load Phase (Mixed 50/50 Traffic)",
+            ["load", "steady-state"]
+        )
+
+    # Annotation 2: Connection Storm
+    if ts_data.get("storm_start") and ts_data.get("storm_end"):
+        post_annotation(
+            grafana_url, user, password,
+            ts_data["storm_start"] * 1000,
+            ts_data["storm_end"] * 1000,
+            "Connection Storm Phase (perf-cql-raw)",
+            ["storm", "flood"]
+        )
+
+
 def main():
     ap = argparse.ArgumentParser(description="Build/upload the ScyllaDB benchmark dashboard.")
     ap.add_argument("--grafana-url", default="http://localhost:3000",
@@ -217,9 +290,25 @@ def main():
                     help="Build only; do not upload to Grafana.")
     ap.add_argument("--user", default=None, help="Grafana basic-auth user (default: none/anon).")
     ap.add_argument("--password", default="", help="Grafana basic-auth password.")
+    ap.add_argument("--timestamps-file", default=None,
+                    help="JSON file containing the benchmark run start/end timestamps to adjust dashboard window.")
     args = ap.parse_args()
 
-    dashboard = build_dashboard(args.datasource_uid)
+    ts_data = None
+    time_from = None
+    time_to = None
+    if args.timestamps_file:
+        try:
+            with open(args.timestamps_file) as f:
+                ts_data = json.load(f)
+            if ts_data.get("workload_start") and ts_data.get("workload_end"):
+                # Focus default view to exactly the run window (with a 30s margin on each side)
+                time_from = str((ts_data["workload_start"] - 30) * 1000)
+                time_to = str((ts_data["workload_end"] + 30) * 1000)
+        except Exception as e:
+            sys.stderr.write(f"WARNING: failed to read timestamps file '{args.timestamps_file}': {e}\n")
+
+    dashboard = build_dashboard(args.datasource_uid, time_from, time_to)
 
     if args.out:
         with open(args.out, "w") as f:
@@ -239,6 +328,11 @@ def main():
     url_path = result.get("url", f"/d/{uid}")
     print(f"Dashboard uploaded (status={status}).")
     print(f"Open it at: {args.grafana_url.rstrip('/')}{url_path}")
+
+    if ts_data:
+        print("Adding phase region markings to Grafana dashboard...")
+        create_annotations(args.grafana_url, args.user, args.password, ts_data)
+
     return 0
 
 

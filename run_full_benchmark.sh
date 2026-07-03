@@ -104,6 +104,45 @@ destroy_infra() {
     else
         echo "ERROR: terraform destroy failed. CHECK YOUR AWS CONSOLE for leftover resources!" >&2
     fi
+
+    # Print the precise start/end time frames of the load and storm phases
+    if [ -f "$SCRIPT_DIR/workload_timestamps.json" ]; then
+        python3 -c '
+import json
+from datetime import datetime, timezone
+try:
+    with open("'"$SCRIPT_DIR"'/workload_timestamps.json") as f:
+        data = json.load(f)
+    
+    def fmt_time(epoch):
+        if not epoch:
+            return "N/A"
+        # Convert to local and UTC strings
+        dt_utc = datetime.fromtimestamp(epoch, tz=timezone.utc)
+        dt_local = datetime.fromtimestamp(epoch)
+        return f"{dt_utc.strftime(\"%Y-%m-%d %H:%M:%S UTC\")} ({dt_local.strftime(\"%H:%M:%S Local\")})"
+
+    print("\n" + "="*73)
+    print(" BENCHMARK TIME FRAMES (excluding schema preparation)")
+    print("="*73)
+    if data.get("storm_only") or not data.get("load_start"):
+        print("  a) Load (steady-state traffic):  N/A (storm-only mode)")
+    else:
+        print(f"  a) Load (steady-state traffic):")
+        print(f"     Start: {fmt_time(data[\"load_start\"])}")
+        print(f"     End:   {fmt_time(data[\"load_end\"])}")
+        print(f"     Duration: {data[\"load_end\"] - data[\"load_start\"]} seconds")
+    
+    print(f"  b) Storm (connection storm):")
+    print(f"     Start: {fmt_time(data[\"storm_start\"])}")
+    print(f"     End:   {fmt_time(data[\"storm_end\"])}")
+    print(f"     Duration: {data[\"storm_end\"] - data[\"storm_start\"]} seconds")
+    print("="*73 + "\n")
+except Exception as e:
+    print("WARNING: could not print time frames:", e)
+' || true
+    fi
+
     return "$rc"
 }
 trap destroy_infra EXIT
@@ -236,7 +275,11 @@ if [ "$DO_LOAD" = "1" ] && [ -n "$SNAPSHOT_DATA_DIR" ]; then
                 sleep 2
             done
             echo "Creating benchmark dashboard..."
-            "$SCRIPT_DIR/make_bench_dashboard.py" --grafana-url http://localhost:3000 \
+            # If the run phase timestamps were recorded, pass them to set the default
+            # dashboard time window and mark the load / storm phases on all graphs.
+            _ts_args=()
+            [ -f "$SCRIPT_DIR/workload_timestamps.json" ] && _ts_args=(--timestamps-file "$SCRIPT_DIR/workload_timestamps.json")
+            "$SCRIPT_DIR/make_bench_dashboard.py" --grafana-url http://localhost:3000 "${_ts_args[@]+"${_ts_args[@]}"}" \
                 || echo "WARNING: benchmark dashboard upload failed (stack is still up)." >&2
         else
             echo "NOTE: $SCRIPT_DIR/make_bench_dashboard.py not found/executable; skipping dashboard." >&2
