@@ -211,6 +211,22 @@ if [ "$ROLE" = "flood" ] || [ "$ROLE" = "both" ]; then
         for ip in $SCYLLA_IPS; do
             log="$STORM_LOG_DIR/storm-${ip}.log"
             : >"$log" 2>/dev/null || true
+            # Log the full command at the very beginning of the storm log file
+            {
+                echo "========================================="
+                echo "Starting Connection Storm Process"
+                echo "Command: timeout -s TERM --kill-after=3s ${_deadline_s}s $STORM_BIN perf-cql-raw \\"
+                echo "  --workload connect \\"
+                echo "  --remote-host $ip \\"
+                echo "  --duration $_dur_s \\"
+                echo "  --connections-per-shard $STORM_CONNECTIONS_PER_SHARD \\"
+                echo "  --concurrency-per-shard $STORM_CONCURRENCY_PER_SHARD \\"
+                echo "  --username $SCYLLA_USER --password $SCYLLA_PASSWORD \\"
+                echo "  --continue-after-error true \\"
+                echo "  ${_smp_arg:+$_smp_arg }--overprovisioned"
+                echo "========================================="
+            } >>"$log" 2>/dev/null || true
+
             # --overprovisioned keeps the tool friendly as a CLIENT sharing the
             # loader with others (no dedicated cores / real-time priority). NOTE:
             # do NOT pass --developer-mode here: it is a scylla-SERVER config
