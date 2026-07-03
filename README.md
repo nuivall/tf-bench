@@ -9,7 +9,7 @@ The ScyllaDB cluster runs with **Precalculated Storage I/O Properties** written 
 ## 🏗️ Architecture
 
 1. **VPC (`10.0.0.0/16`)**: Distributed across 3 Availability Zones (AZs) in the target region (e.g. `us-east-1a`, `us-east-1b`, `us-east-1c`).
-2. **3 Scylla DB Nodes (`i3en.xlarge`)**: Each node is placed in a different AZ with local NVMe SSD storage formatted as XFS and configured as RAID-0.
+2. **3 Scylla DB Nodes (`i4i.large`)**: Each node is a 2‑core **x86 (Intel Ice Lake)** instance placed in a different AZ with local NVMe SSD storage formatted as XFS and configured as RAID-0. The cluster enforces **username/password authentication** (`PasswordAuthenticator` + `CassandraAuthorizer`); the default superuser is `cassandra` / `cassandra`.
 3. **3 Loader Nodes (`c5.xlarge`)**: Distributed in round-robin fashion across the 3 AZs. Preinstalled with the asynchronous Rust-based **Latte** benchmarking tool.
 4. **1 Monitoring Node (`t3.small`)**: Preconfigured with **Scylla Monitoring Stack** (Docker-based Prometheus + Grafana), automatically capturing cluster metrics.
 
@@ -49,22 +49,39 @@ The benchmark execution is completely automated. Instead of copying IP addresses
 ### Option A: Local Automation (Recommended)
 We provide a local orchestrator script `run_benchmark.sh` in the root of the project. It automatically queries the active Terraform state for Scylla private IPs and Loader public IPs, establishes an SSH tunnel to Loader-0, and launches the entire benchmark suite.
 
-To run the automated benchmark with its **default duration of 5 minutes (`5m`)**:
+To run the automated benchmark with its **default timing (5-minute steady-state:
+a 2-minute warm-up baseline, then a 3-minute connection storm overlapping the
+remaining load)**:
 ```bash
 ./run_benchmark.sh
 ```
 
-To customize the steady-state duration (for example, to run for **10 minutes** instead):
+To customize the steady-state duration (for example, to run for **20 minutes** instead):
 ```bash
-./run_benchmark.sh --duration 10m
+./run_benchmark.sh --duration 20m
 ```
+
+Throughput is throttled with Latte's `--rate` for a stable, repeatable load.
+`--steady-rate` sets the **total** steady ops/s across all steady loaders
+(default `36000` ≈ 18k reads + 18k writes), which the orchestrator splits evenly
+per steady loader. `--concurrency` only **caps** in-flight requests; it does *not*
+limit throughput on cheap cache-hit reads, so use `--steady-rate` to control load:
+```bash
+./run_benchmark.sh --steady-rate 24000        # ~12k reads + ~12k writes total
+```
+
+Latte runs in quiet mode (`-q`) so the per-second progress bar is suppressed and
+only phase banners, storm logs, and the final report are printed. Press **Ctrl-C**
+at any time to abort cleanly: the orchestrator tears down the local SSH sessions
+**and** signals `latte`/`connect_storm` on every loader to stop (exit code 130).
 
 The script will automatically:
 1. Initialize the Scylla database schema (`latte schema`).
 2. Pre-populate the database with 1,000,000 rows (`latte load`).
 3. Split the loader fleet into two separate groups: **traffic loaders** run only
    the steady-state 50/50 workload, while **storm loaders** run only the
-   dedicated connection storm generator (`connect_storm.py`).
+   dedicated high-rate connection storm generator (the prebuilt `connect_storm`
+   Rust binary).
 4. Execute the steady-state 50/50 mixed read/write workload on the traffic loaders.
 5. After `--flood-delay`, trigger the connection storm on the storm loaders for
    `--flood-duration`, then clean up on completion.
@@ -81,23 +98,31 @@ If you prefer to connect to the loader VMs and execute tasks step-by-step:
    ```
 
 2. **Initialize Database Schema:**
+   > The cluster requires auth. Pass `--user`/`--password` **before** the
+   > workload path (Latte only honours them in that position).
    ```bash
-   latte schema workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
+   latte schema --user cassandra --password cassandra workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
    ```
 
 3. **Pre-populate Database (Creates 1,000,000 rows):**
    ```bash
-   latte run -f load -d 1000000 --threads 8 --concurrency 64 workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
+   latte run --user cassandra --password cassandra -f load -d 1000000 --threads 8 --concurrency 64 workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
    ```
 
 4. **Simulate a Connection Storm (Run in a separate terminal / background):**
    ```bash
-   python3 ./workloads/connect_storm.py --duration 120s --rate 40 --hold 2s <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
+   ./workloads/connect_storm --duration 120s --rate 1000 --hold 2s --user cassandra --password cassandra <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
    ```
+   > `connect_storm` is a prebuilt Rust binary (async `scylla` driver). `--rate`
+   > is new CQL sessions/s **per loader**; with the default 10 storm loaders this
+   > targets ~10,000 sessions/s aggregate. Rebuild it from `workloads/connect_storm_rs`
+   > with `cargo build --release` if you change the source.
 
 5. **Run Steady-State 50/50 Mixed Workload (reads: 50%, writes: 50%):**
+   > `-q` silences the per-second progress bar; `-r` throttles throughput to a
+   > steady ops/s (here 18,000 ≈ 9k reads + 9k writes for this single loader).
    ```bash
-   latte run -f read:0.5 -f write:0.5 -d 10m --threads 8 --concurrency 64 workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
+   latte run -q --user cassandra --password cassandra -f read:0.5 -f write:0.5 -d 5m --threads 8 --concurrency 64 -r 18000 workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
    ```
 
 ---
@@ -113,7 +138,10 @@ The official Scylla Monitoring Stack is fully functional on the Monitoring node.
 4. Observe real-time statistics including:
    * Read and Write latency histograms (coordinated in real time across nodes).
    * **CPU utilization per Shard** (Scylla's share-nothing asynchronous executor).
-   * **CQL Connection count** (watch this spike under connection storm tests).
+   * **CQL Connection count** (watch this spike under connection storm tests). The
+     storm shuffles its contact points per session and uses a round-robin policy,
+     so new connections spread **evenly across all 3 nodes** rather than piling
+     onto the seed.
    * I/O queue delays, disk writes/reads, and compaction rates.
 
 ---
@@ -178,7 +206,7 @@ Then open Grafana at `http://localhost:3000`. Stop it later with `./kill-all.sh`
     --tf-var "trusted_cidr=$(curl -s https://checkip.amazonaws.com)/32" \
     --monitoring-dir /path/to/scylla-monitoring \
     --no-load \
-    -- --duration 5m
+    -- --duration 15m
 ```
 
 > ⚠️ Because teardown is unconditional, don't rely on the cluster still being up

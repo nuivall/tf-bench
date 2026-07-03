@@ -9,8 +9,8 @@
 #                    ZERO new connections/s (the pool is reused). This is the
 #                    "traffic" role and does NOT run the connection storm.
 #   --role flood   : sits idle for FLOOD_DELAY, then runs the connection storm
-#                    (connect_storm.py) for FLOOD_DURATION. No steady traffic.
-#                    This is the "storm" role and does NOT run steady load.
+#                    (the prebuilt `connect_storm` binary) for FLOOD_DURATION.
+#                    No steady traffic. This is the "storm" role.
 #   --role both    : runs steady load AND, after FLOOD_DELAY, overlaps the
 #                    connection storm on top of it for FLOOD_DURATION. Kept for
 #                    flexibility; the orchestrator no longer assigns it so that
@@ -21,22 +21,33 @@
 #
 # Usage:
 #   run_benchmark.sh --role <load|flood|both> \
-#                    [--duration 5m] [--flood-delay 120s] [--flood-duration 120s] \
-#                    [--storm-rate 40] [--storm-hold 2s] \
-#                    [--threads N] [--concurrency N] [--connections N] \
+#                    [--duration 5m] [--flood-delay 120s] [--flood-duration 180s] \
+#                    [--storm-rate 1000] [--storm-hold 2s] \
+#                    [--threads N] [--concurrency N] [--rate OPS_PER_SEC] \
+#                    [--connections N] [--user cassandra] [--password cassandra] \
 #                    <scylla-ip-1> [scylla-ip-2 ...]
+#
+# --rate is this loader's steady throughput in ops/s (latte -r). --concurrency is
+# only the in-flight cap. latte output is quiet (-q): the continuous progress bar
+# is suppressed so phase banners and storm logs stay visible.
 set -u
 
 ROLE="both"
-DURATION="5m"           # steady-state length
-FLOOD_DELAY="120s"      # wait before the storm, to capture a clean baseline
-FLOOD_DURATION="120s"   # how long the storm lasts (2x the old 60s)
-STORM_RATE="40"         # storm: new CQL sessions opened per second (steepness)
+DURATION="5m"           # steady-state length (2m warm-up + 3m overlapping the storm)
+FLOOD_DELAY="120s"      # 2m warm-up baseline before the storm fires
+FLOOD_DURATION="180s"   # how long the storm lasts (3m)
+STORM_RATE="1000"       # storm: new CQL sessions opened per second (steepness).
+                        # x10 storm loaders -> ~10,000 sessions/s aggregate.
 STORM_HOLD="2s"         # storm: how long each session is held before closing
 THREADS="8"             # steady-load latte -t
-CONCURRENCY="64"        # steady-load latte -p (async requests per thread)
+CONCURRENCY="64"        # steady-load latte -p (in-flight request CAP per thread).
+                        # Does NOT throttle throughput; use --rate for that.
+RATE="18000"            # steady-load latte -r (cycles/s = ops/s) for THIS loader.
+                        # This is the precise throughput throttle. 0 = unthrottled.
 CONNECTIONS=""          # steady-load latte -c (connections per shard); blank = latte default
 DO_SCHEMA="0"           # whether this loader (re)creates schema + loads data
+SCYLLA_USER="${SCYLLA_USER:-cassandra}"       # CQL auth user (PasswordAuthenticator)
+SCYLLA_PASSWORD="${SCYLLA_PASSWORD:-cassandra}" # CQL auth password
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -48,7 +59,10 @@ while [[ "$#" -gt 0 ]]; do
         --storm-hold)     STORM_HOLD="$2"; shift 2 ;;
         --threads)        THREADS="$2"; shift 2 ;;
         --concurrency)    CONCURRENCY="$2"; shift 2 ;;
+        --rate)           RATE="$2"; shift 2 ;;
         --connections)    CONNECTIONS="$2"; shift 2 ;;
+        --user)           SCYLLA_USER="$2"; shift 2 ;;
+        --password)       SCYLLA_PASSWORD="$2"; shift 2 ;;
         --schema)         DO_SCHEMA="1"; shift ;;
         --) shift; break ;;
         -*) echo "Unknown option: $1" >&2; exit 1 ;;
@@ -64,8 +78,10 @@ fi
 
 WORKLOAD_PATH="$HOME/workloads/workload.rn"
 [ -f "$WORKLOAD_PATH" ] || WORKLOAD_PATH="./workload.rn"
-STORM_PATH="$HOME/workloads/connect_storm.py"
-[ -f "$STORM_PATH" ] || STORM_PATH="./connect_storm.py"
+# Dedicated high-rate connection-storm generator (prebuilt Rust binary; shipped
+# to the loader by the orchestrator, no build/toolchain needed on the node).
+STORM_PATH="$HOME/workloads/connect_storm"
+[ -f "$STORM_PATH" ] || STORM_PATH="./connect_storm"
 
 HOST="$(hostname)"
 banner() { echo "[$(date '+%H:%M:%S')] [$HOST] $*"; }
@@ -73,19 +89,37 @@ banner() { echo "[$(date '+%H:%M:%S')] [$HOST] $*"; }
 CONN_ARG=""
 [ -n "$CONNECTIONS" ] && CONN_ARG="-c $CONNECTIONS"
 
+# latte -r/--rate is the precise throughput throttle (cycles/s). Applied only
+# when RATE > 0; otherwise latte runs as fast as possible. NOTE: -p/--concurrency
+# alone does NOT limit throughput for cheap cache-hit reads.
+RATE_ARG=""
+[ -n "$RATE" ] && [ "$RATE" -gt 0 ] 2>/dev/null && RATE_ARG="-r $RATE"
+
+# -q/--quiet silences latte's continuous per-second progress bar, which would
+# otherwise flood the logs and hide the phase banners / storm output. The final
+# summary report is still printed.
+QUIET_ARG="-q"
+
+# The cluster runs PasswordAuthenticator, so EVERY latte invocation (schema,
+# load, and the steady run) must authenticate or it fails to connect and no
+# workload traffic is generated. latte reads --user/--password (long forms; -p
+# is already --concurrency).
+AUTH_ARG="--user $SCYLLA_USER --password $SCYLLA_PASSWORD"
+
 echo "========================================================================="
 echo " PER-LOADER RUN  host=$HOST  role=$ROLE"
 echo "   scylla targets : $SCYLLA_IPS"
-echo "   steady load    : -f read:0.5 -f write:0.5 -d $DURATION -t $THREADS -p $CONCURRENCY $CONN_ARG"
+echo "   auth user      : $SCYLLA_USER"
+echo "   steady load    : -f read:0.5 -f write:0.5 -d $DURATION -t $THREADS -p $CONCURRENCY ${RATE_ARG:-(unthrottled)} $CONN_ARG"
 echo "   storm          : delay=$FLOOD_DELAY duration=$FLOOD_DURATION rate=${STORM_RATE}/s hold=$STORM_HOLD (role-dependent)"
 echo "========================================================================="
 
 # Optional: one designated loader prepares schema + pre-populates data.
 if [ "$DO_SCHEMA" = "1" ]; then
     banner "[schema] Initializing schema..."
-    latte schema "$WORKLOAD_PATH" $SCYLLA_IPS
+    latte schema $AUTH_ARG "$WORKLOAD_PATH" $SCYLLA_IPS
     banner "[load] Pre-populating 1,000,000 rows..."
-    latte run -f load -d 1000000 --threads 8 --concurrency 64 "$WORKLOAD_PATH" $SCYLLA_IPS
+    latte run $QUIET_ARG $AUTH_ARG -f load -d 1000000 --threads 8 --concurrency 64 "$WORKLOAD_PATH" $SCYLLA_IPS
     banner "[load] Data load complete."
 fi
 
@@ -96,10 +130,11 @@ if [ "$ROLE" = "flood" ] || [ "$ROLE" = "both" ]; then
         banner "[storm] Connection storm ARMED — waiting ${FLOOD_DELAY} for baseline..."
         sleep "${FLOOD_DELAY%s}" 2>/dev/null || sleep 120
         banner "[storm] >>> CONNECTION STORM TRIGGERED for ${FLOOD_DURATION} (rate=${STORM_RATE}/s hold=${STORM_HOLD}) <<<"
-        python3 "$STORM_PATH" \
+        "$STORM_PATH" \
             --duration "$FLOOD_DURATION" \
             --rate "$STORM_RATE" \
             --hold "$STORM_HOLD" \
+            --user "$SCYLLA_USER" --password "$SCYLLA_PASSWORD" \
             $SCYLLA_IPS
         banner "[storm] <<< CONNECTION STORM ENDED >>>"
     ) &
@@ -109,10 +144,11 @@ fi
 # --- Steady-state load (load / both roles) ------------------------------------
 if [ "$ROLE" = "load" ] || [ "$ROLE" = "both" ]; then
     banner "[load] >>> STEADY-STATE 50/50 mixed load STARTED (persistent pool, 0 new conns) <<<"
-    latte run -f read:0.5 -f write:0.5 \
+    latte run $QUIET_ARG $AUTH_ARG -f read:0.5 -f write:0.5 \
         -d "$DURATION" \
         -t "$THREADS" \
         -p "$CONCURRENCY" \
+        $RATE_ARG \
         $CONN_ARG \
         "$WORKLOAD_PATH" $SCYLLA_IPS
     banner "[load] <<< STEADY-STATE load FINISHED >>>"

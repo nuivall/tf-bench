@@ -11,9 +11,9 @@ variable "cluster_name" {
 }
 
 variable "scylla_instance_type" {
-  description = "EC2 instance type for Scylla DB nodes (needs NVMe instance storage for I/O tuning)"
+  description = "EC2 instance type for Scylla DB nodes (needs NVMe instance storage for I/O tuning). Default i4i.large: 2 vCPU x86 (Intel Ice Lake) with local NVMe SSD; provisions faster than ARM i8g."
   type        = string
-  default     = "i3en.xlarge"
+  default     = "i4i.large"
 }
 
 variable "loader_count" {
@@ -49,6 +49,15 @@ variable "trusted_cidr" {
 # Precalculated I/O Properties map to bypass slow iotune benchmark
 locals {
   io_properties = {
+    # i4i.large: 2 vCPU x86 (Intel Ice Lake), 1x 468GB local AWS Nitro NVMe SSD.
+    # Precalculated to skip the ~15-min iotune run. Values are for the single
+    # NVMe device on the .large size (roughly half of i4i.xlarge's throughput).
+    "i4i.large" = {
+      read_iops       = 200000
+      read_bandwidth  = 1100000000
+      write_iops      = 60000
+      write_bandwidth = 550000000
+    }
     "i3en.xlarge" = {
       read_iops       = 240000
       read_bandwidth  = 1200000000

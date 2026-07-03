@@ -106,7 +106,7 @@ loader_ready="0"
 monitor_ready="0"
 while [ "$(date +%s)" -lt "$deadline" ]; do
     if [ "$loader_ready" != "1" ] && [ -n "$LOADER0_IP" ]; then
-        if ssh "${SSH_OPTS[@]}" ubuntu@"$LOADER0_IP" "command -v latte >/dev/null 2>&1 && test -f /home/ubuntu/workloads/connect_storm.py" >/dev/null 2>&1; then
+        if ssh "${SSH_OPTS[@]}" ubuntu@"$LOADER0_IP" "command -v latte >/dev/null 2>&1 && test -d /home/ubuntu/workloads" >/dev/null 2>&1; then
             loader_ready="1"; echo "  loader0 ($LOADER0_IP) ready (latte + workloads present)."
         fi
     fi

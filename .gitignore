@@ -11,6 +11,12 @@
 # Downloaded monitoring snapshots (Prometheus TSDB tarballs + extracted data)
 snapshots/
 
-# Python bytecode (connect_storm.py)
+# Python bytecode
 __pycache__/
 *.pyc
+
+# Rust build artifacts for the connection-storm tool. The compiled binary is
+# committed at workloads/connect_storm (shipped to loaders); the heavy build
+# output tree is not.
+workloads/connect_storm_rs/target/
+

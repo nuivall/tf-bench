@@ -10,18 +10,9 @@ echo " Starting Latte Loader node provisioning"
 echo "========================================="
 
 # 1. Install dependencies
-apt-get update && apt-get install -y curl wget git htop iotop build-essential python3 python3-pip
+apt-get update && apt-get install -y curl wget git htop iotop build-essential
 
-# 1a. Install the ScyllaDB Python driver used by the dedicated connection-storm
-# tool (connect_storm.py). --break-system-packages is required on Ubuntu 24.04
-# (PEP 668 externally-managed environment). scylla-driver is the shard-aware
-# ScyllaDB fork of the DataStax cassandra driver and imports as `cassandra`.
-echo "Installing ScyllaDB Python driver (scylla-driver)..."
-pip3 install --break-system-packages scylla-driver \
-    || pip3 install scylla-driver \
-    || echo "WARNING: failed to install scylla-driver; connection storm will not run."
-
-# 1b. OS tuning for high new-connection-per-second connection floods.
+# 1a. OS tuning for high new-connection-per-second connection floods.
 # A connection storm opens and tears down huge numbers of short-lived TCP+CQL
 # sessions. The client side is normally limited first by (a) open file
 # descriptors, (b) the ephemeral source-port range, and (c) sockets stuck in
@@ -68,16 +59,13 @@ latte --version
 mkdir -p /home/ubuntu/workloads
 
 # The embedded workload files are gzip+base64-compressed (to stay under the
-# 16 KB EC2 user_data limit). Decode each back to its original form.
+# 16 KB EC2 user_data limit). Decode each back to its original form. NOTE: the
+# connection-storm generator is a PREBUILT binary (connect_storm) that is too
+# large for user_data; the orchestrator scp's it onto the loader at run time.
 
 # Write workloads/workload.rn to loader
 base64 -d <<'EOF' | gunzip > /home/ubuntu/workloads/workload.rn
 ${workload_rn_content}
-EOF
-
-# Write workloads/connect_storm.py to loader (dedicated connection-storm tool)
-base64 -d <<'EOF' | gunzip > /home/ubuntu/workloads/connect_storm.py
-${connect_storm_content}
 EOF
 
 # Write workloads/run_benchmark.sh to loader
@@ -86,7 +74,6 @@ ${run_benchmark_content}
 EOF
 
 # Make scripts executable and fix ownership
-chmod +x /home/ubuntu/workloads/connect_storm.py
 chmod +x /home/ubuntu/workloads/run_benchmark.sh
 chown -R ubuntu:ubuntu /home/ubuntu/workloads
 

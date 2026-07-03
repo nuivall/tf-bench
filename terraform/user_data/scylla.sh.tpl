@@ -95,6 +95,27 @@ broadcast_rpc_address: $PRIVATE_IP
 endpoint_snitch: Ec2Snitch
 api_address: 127.0.0.1
 developer_mode: false
+# ---- Authentication / Authorization ----------------------------------------
+# Real username/password auth (PasswordAuthenticator) + role-based permissions
+# (CassandraAuthorizer). Clients MUST present valid credentials.
+#
+# latte authenticates correctly against this: its `--user`/`--password` flags
+# work as long as they are passed BEFORE the workload path positional (which the
+# benchmark scripts do). NOTE: do NOT use the Transitional* variants here — the
+# pinned latte build sends an empty SASL username that trips a server-side bug
+# ("plain_sasl_challenge::get_username() called without username") under
+# transitional auth, whereas strict PasswordAuthenticator with real credentials
+# works cleanly.
+authenticator: PasswordAuthenticator
+authorizer: CassandraAuthorizer
+# Preseed the built-in superuser deterministically so credentials exist from the
+# very first boot WITHOUT the usual system_auth RF=1 bootstrap race (which can
+# otherwise leave 'cassandra'/'cassandra' temporarily unusable). The salted hash
+# below is SHA-512 crypt of the password 'cassandra'. NOTE: the '\$' escapes are
+# required so this UNQUOTED heredoc does not shell-expand the '$6'/'$2' segments
+# of the crypt hash (which would corrupt it); the shell writes them as literal '$'.
+auth_superuser_name: cassandra
+auth_superuser_salted_password: '\$6\$x7IFjiX5VCpvNiFk\$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/'
 EOF
 
 # 5. Enable and Start Services
@@ -111,6 +132,27 @@ systemctl restart scylla-server
 # security group already allows within the VPC.
 echo "Enabling Prometheus node_exporter for OS-level metrics..."
 systemctl enable --now scylla-node-exporter
+
+# 5c. Harden auth availability (SEED NODE ONLY).
+# The superuser is preseeded via auth_superuser_salted_password, but the backing
+# 'system_auth' keyspace still defaults to RF=1. On a 3-node multi-AZ cluster we
+# raise it to RF=3 so credentials/permissions survive a single-node outage.
+# We authenticate as the preseeded cassandra/cassandra superuser. Runs on the
+# seed only, and retries until CQL + auth are ready.
+if [ "$PRIVATE_IP" = "${seed_ip}" ]; then
+    echo "[seed] Waiting for CQL auth, then bumping system_auth RF to 3..."
+    for i in $(seq 1 60); do
+        if cqlsh "$PRIVATE_IP" -u cassandra -p cassandra \
+                -e "ALTER KEYSPACE system_auth WITH REPLICATION = {'class':'SimpleStrategy','replication_factor':3};" \
+                >/dev/null 2>&1; then
+            echo "[seed] system_auth replication set to RF=3."
+            nodetool repair -pr system_auth >/dev/null 2>&1 || true
+            break
+        fi
+        echo "[seed] CQL not ready yet (attempt $i/60); retrying in 10s..."
+        sleep 10
+    done
+fi
 
 echo "========================================="
 echo " ScyllaDB Node fully provisioned!"
