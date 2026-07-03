@@ -5,7 +5,7 @@
 # out over SSH to every loader IN PARALLEL, assigning each a role. Traffic and
 # storm are run by SEPARATE loader fleets (no overlap):
 #
-#   * TRAFFIC loaders (STEADY_LOADERS, default 2) run ONLY the steady-state
+#   * TRAFFIC loaders (STEADY_LOADERS, default 3) run ONLY the steady-state
 #     50/50 mixed load with a PERSISTENT connection pool. This drives the Scylla
 #     reactor toward ~80% CPU while producing ZERO new connections/s once ramped.
 #     They do NOT participate in the connection storm.
@@ -20,7 +20,7 @@
 #
 # Usage:
 #   ./run_benchmark.sh [--duration 5m] [--flood-delay 120s] [--flood-duration 180s]
-#                      [--steady-loaders 2] [--storm-connections-per-shard 416]
+#                      [--steady-loaders 3] [--storm-connections-per-shard 416]
 #                      [--storm-concurrency-per-shard 10] [--storm-smp 0]
 #                      [--threads 8] [--concurrency 64] [--steady-rate 36000]
 #                      [--connections N] [--user cassandra] [--password cassandra]
@@ -48,7 +48,7 @@ DURATION="5m"           # steady-state length = 2m warm-up baseline + 3m overlap
 FLOOD_DELAY="120s"      # 2m warm-up: steady load establishes a clean baseline
                         # before the storm fires.
 FLOOD_DURATION="180s"   # storm length: 3m (fires at 2m, ends at 5m).
-STEADY_LOADERS="2"      # how many loaders run the steady ~80% traffic (rest = storm)
+STEADY_LOADERS="3"      # how many loaders run the steady ~80% traffic (rest = storm)
 # Connection-storm intensity (ScyllaDB `perf-cql-raw --workload connect`). Each
 # storm loader runs one perf-cql-raw process PER Scylla node; in-flight connect
 # cycles per process = STORM_CONNECTIONS_PER_SHARD x STORM_CONCURRENCY_PER_SHARD
@@ -339,6 +339,8 @@ echo " Launching workload across $NUM_LOADERS loaders (Ctrl+C to abort)..."
 echo "========================================================================="
 WORKLOAD_START_EPOCH=$(date +%s)
 PIDS=()
+# Parse SCYLLA_IPS into an array to select the local zone-based Scylla IP per loader
+read -r -a SCYLLA_IP_ARRAY <<< "$SCYLLA_IPS"
 for idx in "${!LOADER_ARRAY[@]}"; do
     ip="${LOADER_ARRAY[$idx]}"
     if [ "$idx" -lt "$STEADY_LOADERS" ]; then
@@ -348,6 +350,9 @@ for idx in "${!LOADER_ARRAY[@]}"; do
     fi
     CONN_FLAG=""
     [ -n "$CONNECTIONS" ] && CONN_FLAG="--connections $CONNECTIONS"
+
+    # Select the same-zone Scylla IP based on the loader index (modulo 3)
+    TARGET_SCYLLA_IP="${SCYLLA_IP_ARRAY[idx % 3]}"
 
     # Launch each loader's ssh pipeline in its OWN process group (setsid) so we
     # can later signal the ENTIRE tree — the ssh -tt process AND the sed at the
@@ -372,7 +377,7 @@ for idx in "${!LOADER_ARRAY[@]}"; do
             --storm-smp $STORM_SMP \
             --threads $THREADS --concurrency $CONCURRENCY --rate $PER_LOADER_RATE $CONN_FLAG \
             --user '$SCYLLA_USER' --password '$SCYLLA_PASSWORD' \
-            $SCYLLA_IPS" &
+            \"$TARGET_SCYLLA_IP\"" &
     PIDS+=($!)
 done
 

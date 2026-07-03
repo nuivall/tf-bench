@@ -39,7 +39,7 @@
 #
 # Everything after a literal `--` is forwarded verbatim to ./run_benchmark.sh,
 # e.g.:
-#   ./run_full_benchmark.sh -- --duration 3m --steady-loaders 2 --storm-concurrency-per-shard 20
+#   ./run_full_benchmark.sh -- --duration 3m --steady-loaders 3 --storm-concurrency-per-shard 20
 set -u
 
 TF_DIR="terraform"
