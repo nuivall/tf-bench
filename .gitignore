@@ -8,9 +8,6 @@
 *.pem
 *.key
 
-# Downloaded monitoring snapshots (Prometheus TSDB tarballs + extracted data)
-snapshots/
-
 # Python bytecode
 __pycache__/
 *.pyc
