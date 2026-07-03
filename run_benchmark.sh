@@ -491,6 +491,8 @@ echo "========================================================================="
 echo " Downloading benchmark and system logs from all nodes..."
 echo "========================================================================="
 LOGS_DIR="./logs"
+# Clear existing logs directory to ensure we only collect the current run's logs
+rm -rf "$LOGS_DIR"
 mkdir -p "$LOGS_DIR"
 
 # Download in parallel from loaders
