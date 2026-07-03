@@ -72,9 +72,9 @@ PANELS = [
     ),
     (
         "CQL Connections Blocked",
-        'sum(rate(scylla_transport_connections_blocked{}[$__rate_interval])) by (job)',
+        'sum(scylla_transport_connections_blocked{}) by (instance)',
         "short",
-        "New CQL connections blocked/s (throttled at admission).\n\n"
+        "Cumulative count of CQL connections blocked/throttled at admission per instance.\n\n"
         "scylla_transport_connections_blocked",
     ),
     # ---- Latency & throughput ------------------------------------------------
