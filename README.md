@@ -70,11 +70,15 @@ limit throughput on cheap cache-hit reads, so use `--steady-rate` to control loa
 ./run_benchmark.sh --steady-rate 24000        # ~12k reads + ~12k writes total
 ```
 
-Latte runs quietly so the console isn't flooded: `-q` hides the animated progress
-bar and a large `--sampling` period suppresses the per-second statistics rows, so
-only phase banners, storm logs, and the final report are printed. Press **Ctrl-C**
-at any time to abort cleanly: the orchestrator tears down the local SSH sessions
-**and** signals `latte`/`connect_storm` on every loader to stop (exit code 130).
+To keep the console readable, each loader sends its `latte` output (the CONFIG
+banner and the full statistics report) to a per-loader log file on that loader
+(`~/latte-<role>.log`) rather than streaming it back. Your console therefore shows
+only the orchestrator's phase banners and storm progress. If a `latte` run fails,
+the loader prints a short error plus the tail of that log so failures aren't
+silent. To read the full results, `ssh` to a loader and inspect `~/latte-*.log`.
+Press **Ctrl-C** at any time to abort cleanly: the orchestrator tears down the
+local SSH sessions **and** signals `latte`/`connect_storm` on every loader to stop
+(exit code 130).
 
 The script will automatically:
 1. Initialize the Scylla database schema (`latte schema`).

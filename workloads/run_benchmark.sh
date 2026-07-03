@@ -92,6 +92,24 @@ STORM_PATH="$HOME/workloads/connect_storm"
 HOST="$(hostname)"
 banner() { echo "[$(date '+%H:%M:%S')] [$HOST] $*"; }
 
+# All latte output (CONFIG banner + the final statistics report) is verbose and,
+# when streamed back over SSH and multiplied across loaders, floods the console.
+# run_latte() sends latte's stdout+stderr to a per-loader log file instead, so the
+# console only shows this script's own phase banners. The full latte report stays
+# on the loader at $LATTE_LOG for later inspection. On failure we surface a short
+# error plus the tail of the log so problems are not silently swallowed.
+LATTE_LOG="$HOME/latte-${ROLE}.log"
+run_latte() {
+    if "$@" >>"$LATTE_LOG" 2>&1; then
+        return 0
+    fi
+    local rc=$?
+    banner "[error] latte exited $rc — last lines of $LATTE_LOG:"
+    tail -n 15 "$LATTE_LOG" 2>/dev/null | sed 's/^/    /'
+    return $rc
+}
+: >"$LATTE_LOG" 2>/dev/null || true   # truncate any log from a previous run
+
 CONN_ARG=""
 [ -n "$CONNECTIONS" ] && CONN_ARG="-c $CONNECTIONS"
 
@@ -121,9 +139,9 @@ echo "========================================================================="
 # Optional: one designated loader prepares schema + pre-populates data.
 if [ "$DO_SCHEMA" = "1" ]; then
     banner "[schema] Initializing schema..."
-    latte schema $AUTH_ARG "$WORKLOAD_PATH" $SCYLLA_IPS
+    run_latte latte schema $AUTH_ARG "$WORKLOAD_PATH" $SCYLLA_IPS
     banner "[load] Pre-populating 1,000,000 rows..."
-    latte run $QUIET_ARG $AUTH_ARG -f load -d 1000000 --threads 8 --concurrency 64 "$WORKLOAD_PATH" $SCYLLA_IPS
+    run_latte latte run $QUIET_ARG $AUTH_ARG -f load -d 1000000 --threads 8 --concurrency 64 "$WORKLOAD_PATH" $SCYLLA_IPS
     banner "[load] Data load complete."
 fi
 
@@ -148,7 +166,7 @@ fi
 # --- Steady-state load (load / both roles) ------------------------------------
 if [ "$ROLE" = "load" ] || [ "$ROLE" = "both" ]; then
     banner "[load] >>> STEADY-STATE 50/50 mixed load STARTED (persistent pool, 0 new conns) <<<"
-    latte run $QUIET_ARG $AUTH_ARG -f read:0.5 -f write:0.5 \
+    run_latte latte run $QUIET_ARG $AUTH_ARG -f read:0.5 -f write:0.5 \
         -d "$DURATION" \
         -t "$THREADS" \
         -p "$CONCURRENCY" \
