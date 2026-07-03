@@ -67,7 +67,7 @@ if [ -z "$MONITOR_IP" ]; then
     exit 1
 fi
 
-SSH_OPTS=(-i "$KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o ConnectTimeout=20)
+SSH_OPTS=(-i "$KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=20)
 
 TS="$(date +%Y%m%d_%H%M%S)"
 DEST_DIR="${OUT_DIR%/}/${TS}"

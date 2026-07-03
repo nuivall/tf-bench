@@ -169,7 +169,7 @@ if [ ! -f "$KEY_FILE" ]; then
     exit 1
 fi
 
-SSH_OPTS=(-i "$KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o ConnectTimeout=20)
+SSH_OPTS=(-i "$KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=20)
 
 # ---- Progress ticker helpers -------------------------------------------------
 # Convert a duration token (e.g. "5m", "120s", "1500ms", or a bare number of

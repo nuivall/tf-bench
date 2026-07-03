@@ -203,7 +203,7 @@ MONITOR_IP="$(terraform -chdir="$TF_DIR" output -raw monitoring_node_public_ip 2
 LOADER0_IP="$(terraform -chdir="$TF_DIR" output -json loader_node_public_ips 2>/dev/null \
                 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
 
-SSH_OPTS=(-i "$KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10)
+SSH_OPTS=(-i "$KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10)
 
 # ---- 2. Wait for instances to finish cloud-init provisioning -----------------
 banner "STEP: waiting for loaders + monitoring to become ready (timeout ${BOOT_TIMEOUT}s)"
