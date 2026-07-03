@@ -134,6 +134,25 @@ CONN_ARG=""
 # The final summary report is still printed in full.
 QUIET_ARG="-q -s 100000s"
 
+# Wait for ScyllaDB to open its CQL port (9042) before any latte commands or storm processes run.
+wait_for_cql() {
+    local ip max_attempts=40 delay=3 attempt
+    for ip in $SCYLLA_IPS; do
+        attempt=1
+        banner "[cql-check] Waiting for ScyllaDB on $ip:9042 to become ready..."
+        while ! timeout 1 bash -c "cat < /dev/null > /dev/tcp/$ip/9042" 2>/dev/null; do
+            if [ "$attempt" -ge "$max_attempts" ]; then
+                banner "[cql-check] FATAL: ScyllaDB on $ip did not open port 9042 after $(( max_attempts * delay ))s"
+                exit 1
+            fi
+            sleep "$delay"
+            attempt=$(( attempt + 1 ))
+        done
+        banner "[cql-check] ScyllaDB on $ip:9042 is reachable!"
+    done
+}
+wait_for_cql
+
 # The cluster runs PasswordAuthenticator, so EVERY latte invocation (schema,
 # load, and the steady run) must authenticate or it fails to connect and no
 # workload traffic is generated. latte reads --user/--password (long forms; -p
