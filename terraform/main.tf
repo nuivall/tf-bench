@@ -294,7 +294,7 @@ resource "aws_instance" "loader" {
   user_data_base64 = base64gzip(templatefile("${path.module}/user_data/loader.sh.tpl", {
     workload_rn_content   = base64gzip(file("${path.module}/../workloads/workload.rn"))
     run_benchmark_content = base64gzip(file("${path.module}/../workloads/run_benchmark.sh"))
-    scylla_version        = var.scylla_version
+    scylla_version        = "2026.2"  # Loaders always use 2026.2 to ensure perf-cql-raw is available
   }))
 
   tags = {

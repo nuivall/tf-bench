@@ -23,6 +23,7 @@
 # Usage:
 #   ./run_full_benchmark.sh [--monitoring-dir /code/scylladb/scylla-monitoring]
 #                           [--snapshot-dir ./snapshots]
+#                           [--scylla-version <version>]
 #                           [--tf-var 'trusted_cidr=1.2.3.4/32']   (repeatable)
 #                           [--boot-timeout 900] [--no-monitoring-snapshot-load]
 #                           [--storm-only]
@@ -50,6 +51,7 @@ SNAPSHOT_DIR="./snapshots"
 BOOT_TIMEOUT="900"       # seconds to wait for instances to finish provisioning
 DO_LOAD="1"              # load the monitoring snapshot into the LOCAL stack at the end
 STORM_ONLY="0"           # if 1, forward --storm-only to run_benchmark.sh (storm-only)
+SCYLLA_VER=""            # ScyllaDB version (e.g. 2026.2.0, 2025.1.9)
 TF_VARS=()               # extra -var arguments for terraform
 BENCH_ARGS=()            # forwarded to run_benchmark.sh
 
@@ -58,6 +60,7 @@ while [[ "$#" -gt 0 ]]; do
         --monitoring-dir) MONITORING_DIR="$2"; shift 2 ;;
         --snapshot-dir)   SNAPSHOT_DIR="$2"; shift 2 ;;
         --boot-timeout)   BOOT_TIMEOUT="$2"; shift 2 ;;
+        --scylla-version) SCYLLA_VER="$2"; shift 2 ;;
         --tf-var)         TF_VARS+=("-var" "$2"); shift 2 ;;
         --no-monitoring-snapshot-load) DO_LOAD="0"; shift ;;
         --storm-only)     STORM_ONLY="1"; shift ;;
@@ -66,6 +69,40 @@ while [[ "$#" -gt 0 ]]; do
         *) echo "Unknown parameter: $1" >&2; exit 1 ;;
     esac
 done
+
+# Interactive choice of ScyllaDB version if not provided via --scylla-version flag
+if [ -z "${SCYLLA_VER:-}" ]; then
+    if [ -t 0 ]; then
+        echo "========================================================================="
+        echo " ScyllaDB Version Selection"
+        echo "========================================================================="
+        echo "  1) 2026.2.0 (Default)"
+        echo "  2) 2025.1.9"
+        echo "  3) Other (enter custom version)"
+        echo "========================================================================="
+        read -r -p "Enter choice [1-3, default 1]: " choice
+        case "$choice" in
+            2) SCYLLA_VER="2025.1.9" ;;
+            3)
+                read -r -p "Enter custom ScyllaDB version: " custom_ver
+                SCYLLA_VER="$custom_ver"
+                ;;
+            *) SCYLLA_VER="2026.2.0" ;;
+        esac
+    else
+        SCYLLA_VER="2026.2.0"
+    fi
+fi
+
+# Extract major.minor for repository URLs and matching dashboard sets
+if [[ "$SCYLLA_VER" =~ ^([0-9]+\.[0-9]+)\. ]]; then
+    SCYLLA_MAJOR_MINOR="${BASH_REMATCH[1]}"
+else
+    SCYLLA_MAJOR_MINOR="$SCYLLA_VER"
+fi
+
+echo "Selected ScyllaDB version: $SCYLLA_VER (mapped to repository branch: $SCYLLA_MAJOR_MINOR)"
+TF_VARS+=("-var" "scylla_version=$SCYLLA_MAJOR_MINOR")
 
 # Forward storm-only to the benchmark. Appended AFTER parsing so it survives even
 # when `--` supplied an explicit BENCH_ARGS list (which would otherwise replace
