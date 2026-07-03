@@ -57,6 +57,13 @@ PANELS = [
         "new-connections counter)",
     ),
     (
+        "CQL Connections (cumulative) by Instance",
+        'sum(scylla_transport_cql_connections{}) by (instance)',
+        "short",
+        "Cumulative count of established CQL connections over time since Scylla node startup.\n\n"
+        "scylla_transport_cql_connections",
+    ),
+    (
         "CQL Connections Shed",
         'sum(rate(scylla_transport_connections_shed{}[$__rate_interval])) by (job)',
         "short",
