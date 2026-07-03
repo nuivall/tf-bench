@@ -42,6 +42,7 @@
 # e.g.:
 #   ./run_full_benchmark.sh -- --duration 3m --steady-loaders 3 --storm-concurrency-per-shard 20
 set -u
+set -o pipefail
 
 TF_DIR="terraform"
 KEY_FILE="terraform/tf-scylla-benchmark-key.pem"
@@ -111,6 +112,7 @@ TF_VARS+=("-var" "scylla_version=$SCYLLA_MAJOR_MINOR")
 [ "$STORM_ONLY" = "1" ] && BENCH_ARGS+=("--storm-only")
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+mkdir -p "$SCRIPT_DIR/logs"
 
 if [ ! -d "$TF_DIR" ]; then
     echo "Error: 'terraform' directory not found. Run from the project root." >&2
@@ -136,7 +138,7 @@ destroy_infra() {
     DESTROYED="1"
     echo ""
     banner "STEP: terraform destroy (unconditional teardown)"
-    if terraform -chdir="$TF_DIR" destroy -auto-approve "${TF_VARS[@]+"${TF_VARS[@]}"}"; then
+    if terraform -chdir="$TF_DIR" destroy -auto-approve "${TF_VARS[@]+"${TF_VARS[@]}"}" 2>&1 | tee "$SCRIPT_DIR/logs/terraform-destroy.log"; then
         echo "Infrastructure destroyed."
     else
         echo "ERROR: terraform destroy failed. CHECK YOUR AWS CONSOLE for leftover resources!" >&2
@@ -192,8 +194,8 @@ trap on_signal INT TERM
 
 # ---- 1. terraform apply ------------------------------------------------------
 banner "STEP: terraform apply"
-terraform -chdir="$TF_DIR" init -input=false >/dev/null
-if ! terraform -chdir="$TF_DIR" apply -auto-approve "${TF_VARS[@]+"${TF_VARS[@]}"}"; then
+terraform -chdir="$TF_DIR" init -input=false > "$SCRIPT_DIR/logs/terraform-init.log" 2>&1
+if ! terraform -chdir="$TF_DIR" apply -auto-approve "${TF_VARS[@]+"${TF_VARS[@]}"}" 2>&1 | tee "$SCRIPT_DIR/logs/terraform-apply.log"; then
     echo "ERROR: terraform apply failed; aborting (teardown will run)." >&2
     exit 1
 fi
@@ -258,7 +260,9 @@ banner "STEP: fetch monitoring snapshot"
 if SNAP_OUT="$("$SCRIPT_DIR/fetch_snapshot.sh" --out-dir "$SNAPSHOT_DIR")"; then
     echo "$SNAP_OUT"
     SNAPSHOT_DATA_DIR="$(printf '%s\n' "$SNAP_OUT" | tail -n1)"
-    if [ ! -d "$SNAPSHOT_DATA_DIR" ]; then
+    if [ -d "$SNAPSHOT_DATA_DIR" ]; then
+        SNAPSHOT_DATA_DIR="$(cd "$SNAPSHOT_DATA_DIR" && pwd)"
+    else
         echo "WARNING: reported snapshot dir '$SNAPSHOT_DATA_DIR' does not exist." >&2
         SNAPSHOT_DATA_DIR=""
     fi
