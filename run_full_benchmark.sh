@@ -128,23 +128,12 @@ try:
     load_end = data.get("load_end")
     storm_start = data.get("storm_start")
     storm_end = data.get("storm_end")
+    workload_start = data.get("workload_start")
+    workload_end = data.get("workload_end")
 
-    print("\n" + "="*73)
-    print(" BENCHMARK TIME FRAMES (excluding schema preparation)")
-    print("="*73)
-    if data.get("storm_only") or not load_start:
-        print("  a) Load (steady-state traffic):  N/A (storm-only mode)")
-    else:
-        print(f"  a) Load (steady-state traffic):")
-        print(f"     Start: {fmt_time(load_start)}")
-        print(f"     End:   {fmt_time(load_end)}")
-        print(f"     Duration: {load_end - load_start} seconds")
-    
-    print(f"  b) Storm (connection storm):")
-    print(f"     Start: {fmt_time(storm_start)}")
-    print(f"     End:   {fmt_time(storm_end)}")
-    print(f"     Duration: {storm_end - storm_start} seconds")
-    print("="*73 + "\n")
+    print(f"Start: {fmt_time(workload_start)}")
+    print(f"Storm Start: {fmt_time(storm_start)}")
+    print(f"End: {fmt_time(workload_end)}")
 except Exception as e:
     print("WARNING: could not print time frames:", e)
 ' || true
