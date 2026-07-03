@@ -23,7 +23,7 @@
 # Usage:
 #   run_benchmark.sh --role <load|flood|both> \
 #                    [--duration 5m] [--flood-delay 120s] [--flood-duration 180s] \
-#                    [--storm-connections-per-shard 100] [--storm-concurrency-per-shard 10] \
+#                    [--storm-connections-per-shard 416] [--storm-concurrency-per-shard 10] \
 #                    [--storm-smp 0] \
 #                    [--threads N] [--concurrency N] [--rate OPS_PER_SEC] \
 #                    [--connections N] [--user cassandra] [--password cassandra] \
@@ -47,7 +47,9 @@ FLOOD_DURATION="180s"   # how long the storm lasts (3m)
 # uninitialized-connections semaphore (default 8) and triggers
 # scylla_transport_connections_shed. In-flight connect cycles per loader-process
 # = STORM_CONNECTIONS_PER_SHARD x STORM_CONCURRENCY_PER_SHARD x STORM_SMP.
-STORM_CONNECTIONS_PER_SHARD="100"  # perf-cql-raw --connections-per-shard
+# Configured at 416 connections * 10 concurrency per shard across 4 loader cores
+# and 3 target Scylla nodes => ~50,000 active ports/sockets at once per loader.
+STORM_CONNECTIONS_PER_SHARD="416"  # perf-cql-raw --connections-per-shard
 STORM_CONCURRENCY_PER_SHARD="10"   # perf-cql-raw --concurrency-per-shard
 STORM_SMP="0"                      # perf-cql-raw --smp (0 = all loader cores)
 THREADS="8"             # steady-load latte -t

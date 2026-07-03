@@ -20,7 +20,7 @@
 #
 # Usage:
 #   ./run_benchmark.sh [--duration 5m] [--flood-delay 120s] [--flood-duration 180s]
-#                      [--steady-loaders 2] [--storm-connections-per-shard 100]
+#                      [--steady-loaders 2] [--storm-connections-per-shard 416]
 #                      [--storm-concurrency-per-shard 10] [--storm-smp 0]
 #                      [--threads 8] [--concurrency 64] [--steady-rate 36000]
 #                      [--connections N] [--user cassandra] [--password cassandra]
@@ -55,7 +55,9 @@ STEADY_LOADERS="2"      # how many loaders run the steady ~80% traffic (rest = s
 # x (loader cores). This concurrency saturates the server's per-shard
 # uninitialized-connections semaphore (default 8) to trigger
 # scylla_transport_connections_shed.
-STORM_CONNECTIONS_PER_SHARD="100"
+# Configured at 416 connections * 10 concurrency per shard across 4 loader cores
+# and 3 target Scylla nodes => ~50,000 active ports/sockets at once per loader.
+STORM_CONNECTIONS_PER_SHARD="416"
 STORM_CONCURRENCY_PER_SHARD="10"
 STORM_SMP="0"          # perf-cql-raw --smp per storm process (0 = all loader cores)
 THREADS="8"
