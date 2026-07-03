@@ -43,12 +43,17 @@ STORM_HOLD="2s"         # storm: how long each session is held before closing
 THREADS="8"             # steady-load latte -t
 CONCURRENCY="64"        # steady-load latte -p (in-flight request CAP per thread).
                         # Does NOT throttle throughput; use --rate for that.
-RATE="7000"             # steady-load latte -r (cycles/s = ops/s) for THIS loader.
-                        # This is the precise throughput throttle. 0 = unthrottled.
 CONNECTIONS=""          # steady-load latte -c (connections per shard); blank = latte default
 DO_SCHEMA="0"           # whether this loader (re)creates schema + loads data
 SCYLLA_USER="${SCYLLA_USER:-cassandra}"       # CQL auth user (PasswordAuthenticator)
 SCYLLA_PASSWORD="${SCYLLA_PASSWORD:-cassandra}" # CQL auth password
+
+# latte -r/--rate is the precise throughput throttle (cycles/s), set from --rate
+# below. The orchestrator derives the per-loader value from the global STEADY_RATE
+# (STEADY_RATE / STEADY_LOADERS) and passes it as --rate. Empty = unthrottled
+# (latte runs as fast as possible). NOTE: -p/--concurrency alone does NOT limit
+# throughput for cheap cache-hit reads.
+RATE_ARG=""
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -60,7 +65,7 @@ while [[ "$#" -gt 0 ]]; do
         --storm-hold)     STORM_HOLD="$2"; shift 2 ;;
         --threads)        THREADS="$2"; shift 2 ;;
         --concurrency)    CONCURRENCY="$2"; shift 2 ;;
-        --rate)           RATE="$2"; shift 2 ;;
+        --rate)           [ "$2" -gt 0 ] 2>/dev/null && RATE_ARG="-r $2"; shift 2 ;;
         --connections)    CONNECTIONS="$2"; shift 2 ;;
         --user)           SCYLLA_USER="$2"; shift 2 ;;
         --password)       SCYLLA_PASSWORD="$2"; shift 2 ;;
@@ -89,12 +94,6 @@ banner() { echo "[$(date '+%H:%M:%S')] [$HOST] $*"; }
 
 CONN_ARG=""
 [ -n "$CONNECTIONS" ] && CONN_ARG="-c $CONNECTIONS"
-
-# latte -r/--rate is the precise throughput throttle (cycles/s). Applied only
-# when RATE > 0; otherwise latte runs as fast as possible. NOTE: -p/--concurrency
-# alone does NOT limit throughput for cheap cache-hit reads.
-RATE_ARG=""
-[ -n "$RATE" ] && [ "$RATE" -gt 0 ] 2>/dev/null && RATE_ARG="-r $RATE"
 
 # Silence latte's noisy per-line output during the run:
 #   -q/--quiet         removes the animated progress bar.
