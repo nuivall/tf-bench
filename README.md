@@ -70,7 +70,8 @@ limit throughput on cheap cache-hit reads, so use `--steady-rate` to control loa
 ./run_benchmark.sh --steady-rate 24000        # ~12k reads + ~12k writes total
 ```
 
-Latte runs in quiet mode (`-q`) so the per-second progress bar is suppressed and
+Latte runs quietly so the console isn't flooded: `-q` hides the animated progress
+bar and a large `--sampling` period suppresses the per-second statistics rows, so
 only phase banners, storm logs, and the final report are printed. Press **Ctrl-C**
 at any time to abort cleanly: the orchestrator tears down the local SSH sessions
 **and** signals `latte`/`connect_storm` on every loader to stop (exit code 130).
@@ -119,10 +120,12 @@ If you prefer to connect to the loader VMs and execute tasks step-by-step:
    > with `cargo build --release` if you change the source.
 
 5. **Run Steady-State 50/50 Mixed Workload (reads: 50%, writes: 50%):**
-   > `-q` silences the per-second progress bar; `-r` throttles throughput to a
-   > steady ops/s (here 18,000 ≈ 9k reads + 9k writes for this single loader).
+   > `-q` hides the progress bar and `-s 100000s` (a sampling period longer than
+   > the run) suppresses the per-second statistics rows, leaving only the final
+   > report. `-r` throttles throughput to a steady ops/s (here 18,000 ≈ 9k reads
+   > + 9k writes for this single loader).
    ```bash
-   latte run -q --user cassandra --password cassandra -f read:0.5 -f write:0.5 -d 5m --threads 8 --concurrency 64 -r 18000 workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
+   latte run -q -s 100000s --user cassandra --password cassandra -f read:0.5 -f write:0.5 -d 5m --threads 8 --concurrency 64 -r 18000 workloads/workload.rn <scylla-ip-1> <scylla-ip-2> <scylla-ip-3>
    ```
 
 ---

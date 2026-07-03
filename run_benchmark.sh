@@ -27,9 +27,10 @@
 #
 # --steady-rate is the TOTAL steady ops/s across all steady loaders (latte --rate,
 # the precise throughput throttle). --concurrency only CAPS in-flight requests and
-# does NOT limit throughput on cheap cache-hit reads. Press Ctrl-C to abort: the
-# orchestrator stops the local SSH sessions AND signals latte/connect_storm on
-# every loader to stop.
+# does NOT limit throughput on cheap cache-hit reads. latte runs quietly (progress
+# bar off + large sampling period) so only the final report prints, not per-second
+# rows. Press Ctrl-C to abort: the orchestrator stops the local SSH sessions AND
+# signals latte/connect_storm on every loader to stop.
 set -e
 
 TF_DIR="terraform"

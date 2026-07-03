@@ -28,8 +28,9 @@
 #                    <scylla-ip-1> [scylla-ip-2 ...]
 #
 # --rate is this loader's steady throughput in ops/s (latte -r). --concurrency is
-# only the in-flight cap. latte output is quiet (-q): the continuous progress bar
-# is suppressed so phase banners and storm logs stay visible.
+# only the in-flight cap. latte runs quietly: -q hides the progress bar and a
+# large -s/--sampling period suppresses the per-second statistics rows, so only
+# phase banners, storm logs, and the final report are printed.
 set -u
 
 ROLE="both"
@@ -95,10 +96,14 @@ CONN_ARG=""
 RATE_ARG=""
 [ -n "$RATE" ] && [ "$RATE" -gt 0 ] 2>/dev/null && RATE_ARG="-r $RATE"
 
-# -q/--quiet silences latte's continuous per-second progress bar, which would
-# otherwise flood the logs and hide the phase banners / storm output. The final
-# summary report is still printed.
-QUIET_ARG="-q"
+# Silence latte's noisy per-line output during the run:
+#   -q/--quiet         removes the animated progress bar.
+#   -s/--sampling BIG  collapses the periodic statistics log (default 1s, which
+#                      prints a numbers row every second and floods the console)
+#                      into a single end-of-run sample. 100000s (~27h) is longer
+#                      than any run, so no intermediate rows are emitted.
+# The final summary report is still printed in full.
+QUIET_ARG="-q -s 100000s"
 
 # The cluster runs PasswordAuthenticator, so EVERY latte invocation (schema,
 # load, and the steady run) must authenticate or it fails to connect and no
