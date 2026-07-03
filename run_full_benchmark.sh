@@ -6,13 +6,19 @@
 #   2. wait for boot          — poll until loaders + monitoring are ready
 #   3. run the benchmark      — ./run_benchmark.sh (traffic + connection storm)
 #   4. fetch the snapshot     — ./fetch_snapshot.sh (Prometheus TSDB tarball)
-#   5. terraform destroy      — ALWAYS torn down, even if earlier steps failed
-#   6. load snapshot locally  — start the Scylla Monitoring stack in --archive mode
+#   5. load snapshot locally  — start the Scylla Monitoring stack in --archive mode
 #                               against the downloaded data so you can browse the
-#                               exact dashboards offline after the infra is gone.
+#                               dashboards FAST (done before teardown so metrics
+#                               are visible as soon as possible). Also (re)creates
+#                               the custom benchmark dashboard via
+#                               make_bench_dashboard.py, since the stack restart
+#                               wipes any previously-uploaded one.
+#   6. terraform destroy      — ALWAYS torn down, even if earlier steps failed.
 #
 # Teardown is unconditional: destroy runs from a trap so the AWS resources are
-# never left running, regardless of benchmark or snapshot outcome.
+# never left running, regardless of benchmark or snapshot outcome. Because the
+# local load now runs BEFORE destroy, the cluster stays up slightly longer (until
+# you have the offline dashboards), then is torn down.
 #
 # Usage:
 #   ./run_full_benchmark.sh [--monitoring-dir /code/scylladb/scylla-monitoring]
@@ -33,7 +39,7 @@
 #
 # Everything after a literal `--` is forwarded verbatim to ./run_benchmark.sh,
 # e.g.:
-#   ./run_full_benchmark.sh -- --duration 3m --steady-loaders 2 --storm-rate 30
+#   ./run_full_benchmark.sh -- --duration 3m --steady-loaders 2 --storm-concurrency-per-shard 20
 set -u
 
 TF_DIR="terraform"
@@ -168,12 +174,12 @@ else
     SNAPSHOT_DATA_DIR=""
 fi
 
-# ---- 5. Teardown -------------------------------------------------------------
-# Run destroy explicitly here (and mark done) so it happens BEFORE we block on
-# the local monitoring stack. The EXIT trap becomes a no-op afterwards.
-destroy_infra || true
-
-# ---- 6. Load the snapshot locally --------------------------------------------
+# ---- 5. Load the snapshot locally --------------------------------------------
+# Done BEFORE teardown so the metrics become visible as fast as possible (the
+# snapshot is already on local disk, so the AWS infra isn't needed for this).
+# The cluster stays up a bit longer as a result; it is torn down in step 6.
+# NOTE: any `exit 1` below still triggers the EXIT trap, which runs destroy — so
+# teardown is guaranteed even if the local load fails.
 if [ "$DO_LOAD" = "1" ] && [ -n "$SNAPSHOT_DATA_DIR" ]; then
     banner "STEP: load snapshot locally (Scylla Monitoring --archive)"
     if [ ! -x "$MONITORING_DIR/start-all.sh" ]; then
@@ -194,8 +200,26 @@ if [ "$DO_LOAD" = "1" ] && [ -n "$SNAPSHOT_DATA_DIR" ]; then
     echo "   $MONITORING_DIR/start-all.sh --archive '$SNAPSHOT_DATA_DIR'"
     if ( cd "$MONITORING_DIR" && ./start-all.sh --archive "$SNAPSHOT_DATA_DIR" ); then
         echo ""
-        banner "DONE — snapshot loaded. Open Grafana at http://localhost:3000"
+        banner "Snapshot loaded — Grafana at http://localhost:3000 (tearing down AWS next)"
         echo "To stop the local stack later:  ( cd '$MONITORING_DIR' && ./kill-all.sh )"
+
+        # (Re)create the benchmark dashboard. The monitoring stack restart above
+        # wipes any previously-uploaded custom dashboard, so we push it fresh on
+        # every load. Best-effort: a dashboard failure must not fail the pipeline.
+        if [ -x "$SCRIPT_DIR/make_bench_dashboard.py" ]; then
+            echo "Waiting for Grafana API to become ready..."
+            for _ in $(seq 1 30); do
+                if curl -sf -o /dev/null http://localhost:3000/api/health 2>/dev/null; then
+                    break
+                fi
+                sleep 2
+            done
+            echo "Creating benchmark dashboard..."
+            "$SCRIPT_DIR/make_bench_dashboard.py" --grafana-url http://localhost:3000 \
+                || echo "WARNING: benchmark dashboard upload failed (stack is still up)." >&2
+        else
+            echo "NOTE: $SCRIPT_DIR/make_bench_dashboard.py not found/executable; skipping dashboard." >&2
+        fi
     else
         echo ""
         echo "ERROR: the local monitoring stack failed to start." >&2
@@ -212,3 +236,8 @@ else
     echo "Local monitoring-snapshot load disabled (--no-monitoring-snapshot-load)."
     [ -n "$SNAPSHOT_DATA_DIR" ] && echo "Snapshot data dir: $SNAPSHOT_DATA_DIR"
 fi
+
+# ---- 6. Teardown -------------------------------------------------------------
+# Runs AFTER the local load so metrics are up first. The EXIT trap becomes a
+# no-op once this completes.
+destroy_infra || true

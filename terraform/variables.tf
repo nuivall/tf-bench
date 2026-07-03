@@ -17,9 +17,9 @@ variable "scylla_instance_type" {
 }
 
 variable "loader_count" {
-  description = "Number of distributed Latte loader nodes to provision. More nodes = more independent ephemeral-port pools, file-descriptor budgets, and source IPs, which is the main lever for high new-connection-per-second floods."
+  description = "Number of distributed Latte loader nodes to provision. More nodes = more independent ephemeral-port pools, file-descriptor budgets, and source IPs, which is the main lever for high new-connection-per-second floods. Raised 12 -> 18 (+50%) to push the aggregate new-connection arrival rate past the per-shard threshold that triggers scylla_transport_connections_shed."
   type        = number
-  default     = 12
+  default     = 18
 }
 
 variable "loader_instance_type" {

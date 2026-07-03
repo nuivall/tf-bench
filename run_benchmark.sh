@@ -20,7 +20,8 @@
 #
 # Usage:
 #   ./run_benchmark.sh [--duration 5m] [--flood-delay 120s] [--flood-duration 180s]
-#                      [--steady-loaders 2] [--storm-rate 1000] [--storm-hold 2s]
+#                      [--steady-loaders 2] [--storm-connections-per-shard 100]
+#                      [--storm-concurrency-per-shard 10] [--storm-smp 0]
 #                      [--threads 8] [--concurrency 64] [--steady-rate 36000]
 #                      [--connections N] [--user cassandra] [--password cassandra]
 #                      [--storm-only] [--snapshot] [--snapshot-dir ./snapshots]
@@ -35,7 +36,7 @@
 # does NOT limit throughput on cheap cache-hit reads. latte runs quietly (progress
 # bar off + large sampling period) so only the final report prints, not per-second
 # rows. Press Ctrl-C to abort: the orchestrator stops the local SSH sessions AND
-# signals latte/connect_storm on every loader to stop.
+# signals latte/perf-cql-raw on every loader to stop.
 set -e
 
 TF_DIR="terraform"
@@ -48,11 +49,15 @@ FLOOD_DELAY="120s"      # 2m warm-up: steady load establishes a clean baseline
                         # before the storm fires.
 FLOOD_DURATION="180s"   # storm length: 3m (fires at 2m, ends at 5m).
 STEADY_LOADERS="2"      # how many loaders run the steady ~80% traffic (rest = storm)
-STORM_RATE="1000"       # storm: new CQL sessions/s PER storm loader. With the
-                        # default 10 storm loaders this targets ~10,000 new
-                        # sessions/s aggregate (server-side new-connections/s is
-                        # several x higher due to shard-aware pooling).
-STORM_HOLD="2s"         # storm: how long each session is held before closing
+# Connection-storm intensity (ScyllaDB `perf-cql-raw --workload connect`). Each
+# storm loader runs one perf-cql-raw process PER Scylla node; in-flight connect
+# cycles per process = STORM_CONNECTIONS_PER_SHARD x STORM_CONCURRENCY_PER_SHARD
+# x (loader cores). This concurrency saturates the server's per-shard
+# uninitialized-connections semaphore (default 8) to trigger
+# scylla_transport_connections_shed.
+STORM_CONNECTIONS_PER_SHARD="100"
+STORM_CONCURRENCY_PER_SHARD="10"
+STORM_SMP="0"          # perf-cql-raw --smp per storm process (0 = all loader cores)
 THREADS="8"
 CONCURRENCY="64"       # steady-load in-flight request CAP per thread (latte -p).
                        # This does NOT throttle throughput (with cheap cache-hit
@@ -78,8 +83,9 @@ while [[ "$#" -gt 0 ]]; do
         --flood-delay)       FLOOD_DELAY="$2"; shift 2 ;;
         --flood-duration)    FLOOD_DURATION="$2"; shift 2 ;;
         --steady-loaders)    STEADY_LOADERS="$2"; shift 2 ;;
-        --storm-rate)        STORM_RATE="$2"; shift 2 ;;
-        --storm-hold)        STORM_HOLD="$2"; shift 2 ;;
+        --storm-connections-per-shard) STORM_CONNECTIONS_PER_SHARD="$2"; shift 2 ;;
+        --storm-concurrency-per-shard) STORM_CONCURRENCY_PER_SHARD="$2"; shift 2 ;;
+        --storm-smp)         STORM_SMP="$2"; shift 2 ;;
         --storm-only)        STORM_ONLY="1"; shift ;;
         --threads)           THREADS="$2"; shift 2 ;;
         --concurrency)       CONCURRENCY="$2"; shift 2 ;;
@@ -145,7 +151,7 @@ else
     echo "Steady throughput  : UNTHROTTLED (as fast as possible)"
 fi
 echo "CQL auth user      : $SCYLLA_USER (PasswordAuthenticator)"
-echo "Storm              : starts +$FLOOD_DELAY, lasts $FLOOD_DURATION, rate=${STORM_RATE}/s/loader, hold=$STORM_HOLD (separate fleet)"
+echo "Storm              : starts +$FLOOD_DELAY, lasts $FLOOD_DURATION, perf-cql-raw connect (per-node: conns/shard=$STORM_CONNECTIONS_PER_SHARD, conc/shard=$STORM_CONCURRENCY_PER_SHARD), separate fleet"
 [ -n "$MONITOR_IP" ] && echo "Grafana Dashboard  : http://$MONITOR_IP:3000"
 echo "========================================================================="
 
@@ -162,9 +168,54 @@ fi
 
 SSH_OPTS=(-i "$KEY_FILE" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o ConnectTimeout=20)
 
+# ---- Progress ticker helpers -------------------------------------------------
+# Convert a duration token (e.g. "5m", "120s", "1500ms", or a bare number of
+# seconds) into whole seconds.
+to_secs() {
+    local t="${1:-0}" n
+    case "$t" in
+        *ms) n="${t%ms}"; awk "BEGIN{printf \"%d\", ($n)/1000}" ;;
+        *s)  printf '%d' "${t%s}" 2>/dev/null || echo 0 ;;
+        *m)  n="${t%m}"; awk "BEGIN{printf \"%d\", ($n)*60}" ;;
+        *h)  n="${t%h}"; awk "BEGIN{printf \"%d\", ($n)*3600}" ;;
+        *)   printf '%d' "$t" 2>/dev/null || echo 0 ;;
+    esac
+}
+
+# mm:ss formatter.
+fmt_hms() { local s="$1"; printf '%d:%02d' "$((s/60))" "$((s%60))"; }
+
+# Total expected wall-clock length of the timed phases. The steady load runs for
+# DURATION; the storm runs for FLOOD_DELAY+FLOOD_DURATION. The run ends when the
+# LONGER of the two finishes. In STORM-ONLY mode there is no steady load, so only
+# the storm timeline counts.
+_dur_s=$(to_secs "$DURATION")
+_storm_s=$(( $(to_secs "$FLOOD_DELAY") + $(to_secs "$FLOOD_DURATION") ))
+if [ "$STORM_ONLY" = "1" ]; then
+    TOTAL_SECS="$_storm_s"
+else
+    TOTAL_SECS=$(( _dur_s > _storm_s ? _dur_s : _storm_s ))
+fi
+[ "$TOTAL_SECS" -lt 1 ] 2>/dev/null && TOTAL_SECS=1
+
+# Background heartbeat: every 30s print elapsed / remaining benchmark time.
+PROGRESS_PID=""
+progress_ticker() {
+    local total="$1" start now elapsed remaining
+    start=$(date +%s)
+    while :; do
+        sleep 30
+        now=$(date +%s)
+        elapsed=$(( now - start ))
+        remaining=$(( total - elapsed ))
+        [ "$remaining" -lt 0 ] && remaining=0
+        echo "  [progress] elapsed $(fmt_hms "$elapsed") / $(fmt_hms "$total")  (remaining $(fmt_hms "$remaining"))"
+    done
+}
+
 # ---- Ctrl-C / termination handling -------------------------------------------
 # On INT/TERM we must stop BOTH the local SSH children AND the remote workloads
-# they launched (otherwise latte / connect_storm keep hammering the cluster after
+# they launched (otherwise latte / perf-cql-raw keep hammering the cluster after
 # the orchestrator exits). The trap kills the local ssh PIDs, then fans out a
 # best-effort remote pkill to every loader in parallel, and exits non-zero.
 PIDS=()
@@ -177,18 +228,22 @@ cleanup_and_exit() {
     echo "========================================================================="
     echo " Ctrl-C received — stopping local SSH sessions and remote workloads..."
     echo "========================================================================="
+    # Stop the progress ticker if it's running.
+    [ -n "${PROGRESS_PID:-}" ] && kill "$PROGRESS_PID" 2>/dev/null
     # Kill the local ssh child processes (closes the channels).
     for pid in "${PIDS[@]:-}"; do
         kill "$pid" 2>/dev/null
     done
-    # Best-effort: kill latte + the storm binary + the remote runner on every
-    # loader, in parallel, with a short connect timeout so we never hang here.
+    # Best-effort: kill latte + the storm processes (scylla perf-cql-raw) + the
+    # remote runner on every loader, and flush the storm's iptables REDIRECT
+    # rules, in parallel with a short connect timeout so we never hang here.
     if [ "${#LOADER_ARRAY[@]}" -gt 0 ]; then
         for ip in "${LOADER_ARRAY[@]}"; do
             ssh "${SSH_OPTS[@]}" -o ConnectTimeout=8 ubuntu@"$ip" \
                 "pkill -TERM -f 'workloads/run_benchmark.sh' 2>/dev/null; \
                  pkill -TERM -x latte 2>/dev/null; \
-                 pkill -TERM -x connect_storm 2>/dev/null; true" >/dev/null 2>&1 &
+                 pkill -TERM -f 'perf-cql-raw' 2>/dev/null; \
+                 sudo iptables -t nat -F OUTPUT 2>/dev/null; true" >/dev/null 2>&1 &
         done
         wait || true
     fi
@@ -199,27 +254,19 @@ cleanup_and_exit() {
 trap cleanup_and_exit INT TERM
 
 # ---- 1. Sync latest workload files to every loader (in parallel) -------------
-# Ships the workload script, the per-loader runner, and the PREBUILT connection-
-# storm binary (connect_storm). The binary is copied as-is (no build/toolchain on
-# the loader) and made executable. The Rust source dir (connect_storm_rs/) is
-# intentionally NOT synced. Fail loudly if the binary is missing.
+# Ships the latte workload (workload.rn) and the per-loader runner. The
+# connection storm no longer uses a custom binary: it runs ScyllaDB's native
+# `scylla perf-cql-raw`, which is installed on each loader from the Scylla apt
+# repo at provision time (see loader.sh.tpl). Nothing to build or copy here.
 echo "Synchronizing benchmark files to all $NUM_LOADERS loaders..."
-if [ ! -x workloads/connect_storm ]; then
-    echo "ERROR: prebuilt storm binary 'workloads/connect_storm' not found or not executable." >&2
-    echo "       Build it with: (cd workloads/connect_storm_rs && cargo build --release && \\" >&2
-    echo "                        strip target/release/connect_storm && \\" >&2
-    echo "                        cp target/release/connect_storm ../connect_storm)" >&2
-    exit 1
-fi
 for ip in "${LOADER_ARRAY[@]}"; do
     (
         scp "${SSH_OPTS[@]}" \
             workloads/workload.rn \
             workloads/run_benchmark.sh \
-            workloads/connect_storm \
             ubuntu@"$ip":/home/ubuntu/workloads/ >/dev/null 2>&1
         ssh "${SSH_OPTS[@]}" ubuntu@"$ip" \
-            "chmod +x /home/ubuntu/workloads/run_benchmark.sh /home/ubuntu/workloads/connect_storm" >/dev/null 2>&1
+            "chmod +x /home/ubuntu/workloads/run_benchmark.sh" >/dev/null 2>&1
     ) &
 done
 wait
@@ -281,7 +328,9 @@ for idx in "${!LOADER_ARRAY[@]}"; do
                 --duration $DURATION \
                 --flood-delay $FLOOD_DELAY \
                 --flood-duration $FLOOD_DURATION \
-                --storm-rate $STORM_RATE --storm-hold $STORM_HOLD \
+                --storm-connections-per-shard $STORM_CONNECTIONS_PER_SHARD \
+                --storm-concurrency-per-shard $STORM_CONCURRENCY_PER_SHARD \
+                --storm-smp $STORM_SMP \
                 --threads $THREADS --concurrency $CONCURRENCY --rate $PER_LOADER_RATE $CONN_FLAG \
                 --user '$SCYLLA_USER' --password '$SCYLLA_PASSWORD' \
                 $SCYLLA_IPS" 2>&1 | sed "s/^/  [loader$idx:$ROLE] /"
@@ -289,11 +338,22 @@ for idx in "${!LOADER_ARRAY[@]}"; do
     PIDS+=($!)
 done
 
-# Wait for all loaders to finish their phases.
+# Wait for all loaders to finish their phases. A background ticker prints the
+# elapsed/remaining benchmark time every 30s while we block here.
+progress_ticker "$TOTAL_SECS" &
+PROGRESS_PID=$!
+
 FAIL=0
 for pid in "${PIDS[@]}"; do
     wait "$pid" || FAIL=1
 done
+
+# Stop the progress ticker now that the workload is done.
+if [ -n "$PROGRESS_PID" ]; then
+    kill "$PROGRESS_PID" 2>/dev/null
+    wait "$PROGRESS_PID" 2>/dev/null
+    PROGRESS_PID=""
+fi
 
 echo "========================================================================="
 if [ "$FAIL" -eq 0 ]; then
