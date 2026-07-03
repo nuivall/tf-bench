@@ -287,15 +287,15 @@ resource "aws_instance" "loader" {
   vpc_security_group_ids = [aws_security_group.loader.id]
   key_name               = aws_key_pair.key_pair.key_name
 
-  # user_data has a hard 16 KB limit; gzip+base64-compress the embedded
-  # workload files (decoded back on the loader in loader.sh.tpl). The prebuilt
-  # connection-storm binary is too large for user_data and is scp'd to the
-  # loader by the orchestrator at run time instead.
-  user_data = templatefile("${path.module}/user_data/loader.sh.tpl", {
+  # user_data has a hard 16 KB limit. The rendered loader script (with the
+  # embedded, already-base64gzip'd workload files) exceeds that limit, so we
+  # gzip the whole payload and pass it via user_data_base64. cloud-init
+  # transparently gunzips gzip-compressed user_data before executing it.
+  user_data_base64 = base64gzip(templatefile("${path.module}/user_data/loader.sh.tpl", {
     workload_rn_content   = base64gzip(file("${path.module}/../workloads/workload.rn"))
     run_benchmark_content = base64gzip(file("${path.module}/../workloads/run_benchmark.sh"))
     scylla_version        = var.scylla_version
-  })
+  }))
 
   tags = {
     Name = "${var.cluster_name}-loader-${count.index}"

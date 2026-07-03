@@ -203,7 +203,17 @@ if [ "$ROLE" = "flood" ] || [ "$ROLE" = "both" ]; then
         storm_iptables_add
         _dur_s="$(printf '%s' "$FLOOD_DURATION" | sed 's/[^0-9].*$//')"; [ -n "$_dur_s" ] || _dur_s=180
         _smp_arg=""; [ "$STORM_SMP" -gt 0 ] 2>/dev/null && _smp_arg="--smp $STORM_SMP"
-        banner "[storm] >>> CONNECTION STORM TRIGGERED for ${FLOOD_DURATION} (perf-cql-raw connect; per-node conns/shard=${STORM_CONNECTIONS_PER_SHARD} conc/shard=${STORM_CONCURRENCY_PER_SHARD}) <<<"
+        # HARD DEADLINE for each storm process. perf-cql-raw does not always exit
+        # cleanly when its --duration elapses (e.g. it can wedge in its pre-run
+        # readiness/compaction polls, or take a long time to tear down under a
+        # storm), which would make the wait below block forever and hang the whole
+        # benchmark. So run each one under `timeout`: give it --duration plus a
+        # SHORT grace to finish on its own, then SIGTERM, then SIGKILL 3s later if
+        # it still refuses to die. This guarantees the storm always terminates
+        # promptly after its duration.
+        _grace_s=3
+        _deadline_s=$(( _dur_s + _grace_s ))
+        banner "[storm] >>> CONNECTION STORM TRIGGERED for ${FLOOD_DURATION} (perf-cql-raw connect; per-node conns/shard=${STORM_CONNECTIONS_PER_SHARD} conc/shard=${STORM_CONCURRENCY_PER_SHARD}; hard deadline ${_deadline_s}s) <<<"
         pids=()
         for ip in $SCYLLA_IPS; do
             log="$STORM_LOG_DIR/storm-${ip}.log"
@@ -213,22 +223,40 @@ if [ "$ROLE" = "flood" ] || [ "$ROLE" = "both" ]; then
             # do NOT pass --developer-mode here: it is a scylla-SERVER config
             # option and is rejected by perf-cql-raw's standalone (--remote-host)
             # mode, which aborts the storm.
-            "$STORM_BIN" perf-cql-raw \
-                --workload connect \
-                --remote-host "$ip" \
-                --duration "$_dur_s" \
-                --connections-per-shard "$STORM_CONNECTIONS_PER_SHARD" \
-                --concurrency-per-shard "$STORM_CONCURRENCY_PER_SHARD" \
-                --username "$SCYLLA_USER" --password "$SCYLLA_PASSWORD" \
-                $_smp_arg --overprovisioned \
+            # --continue-after-error true is ESSENTIAL for a storm: perf-cql-raw
+            # otherwise stops on the first failed connect (stop_on_error), but a
+            # connection storm is SUPPOSED to provoke connect errors (the server
+            # blocking/shedding/refusing new connections). Without this the storm
+            # would abort the instant it starts working.
+            # `timeout --kill-after=3s <deadline>` sends SIGTERM at the deadline
+            # and SIGKILL 3s after that; -s TERM makes the first signal SIGTERM.
+            timeout -s TERM --kill-after=3s "${_deadline_s}s" \
+                "$STORM_BIN" perf-cql-raw \
+                    --workload connect \
+                    --remote-host "$ip" \
+                    --duration "$_dur_s" \
+                    --connections-per-shard "$STORM_CONNECTIONS_PER_SHARD" \
+                    --concurrency-per-shard "$STORM_CONCURRENCY_PER_SHARD" \
+                    --username "$SCYLLA_USER" --password "$SCYLLA_PASSWORD" \
+                    --continue-after-error true \
+                    $_smp_arg --overprovisioned \
                 >>"$log" 2>&1 &
             pids+=($!)
             banner "[storm]   -> perf-cql-raw connect to $ip (log: $log)"
         done
         rc=0
-        for p in "${pids[@]}"; do wait "$p" || rc=1; done
+        for p in "${pids[@]}"; do
+            # timeout exits 124 if it had to SIGTERM, or 137 if it SIGKILLed the
+            # process. Both mean "the storm ran its full duration and we forcibly
+            # stopped it" — that is the NORMAL end of a storm, not a failure.
+            prc=0; wait "$p" || prc=$?
+            case "$prc" in
+                0|124|137|143) : ;;   # clean, timed-out, killed, or term'd -> OK
+                *) rc=1 ;;
+            esac
+        done
         if [ "$rc" -ne 0 ]; then
-            banner "[storm] one or more perf-cql-raw processes exited non-zero (see storm-*.log):"
+            banner "[storm] one or more perf-cql-raw processes exited with an unexpected error (see storm-*.log):"
             for ip in $SCYLLA_IPS; do tail -n 8 "$STORM_LOG_DIR/storm-${ip}.log" 2>/dev/null | sed "s/^/    [$ip] /"; done
         fi
         storm_iptables_del

@@ -201,15 +201,13 @@ fi
 # Background heartbeat: every 30s print elapsed / remaining benchmark time.
 PROGRESS_PID=""
 progress_ticker() {
-    local total="$1" start now elapsed remaining
+    local total="$1" start now elapsed
     start=$(date +%s)
     while :; do
         sleep 30
         now=$(date +%s)
         elapsed=$(( now - start ))
-        remaining=$(( total - elapsed ))
-        [ "$remaining" -lt 0 ] && remaining=0
-        echo "  [progress] elapsed $(fmt_hms "$elapsed") / $(fmt_hms "$total")  (remaining $(fmt_hms "$remaining"))"
+        echo "  [progress] elapsed $(fmt_hms "$elapsed") / $(fmt_hms "$total")"
     done
 }
 
@@ -343,10 +341,52 @@ done
 progress_ticker "$TOTAL_SECS" &
 PROGRESS_PID=$!
 
+# ---- Global watchdog: never let the run hang past a hard cap -----------------
+# Even with per-process timeouts on the loaders, a wedged/unkillable remote
+# process or a stuck SSH channel could otherwise block the wait loop below
+# forever (the symptom: the progress ticker keeps printing past the expected
+# total). This watchdog fires a short margin after TOTAL_SECS — just enough to
+# cover the loaders' own per-process SIGTERM/SIGKILL grace plus SSH teardown —
+# and forcibly stops the remote workloads and local SSH children so the wait
+# loop always returns promptly.
+WATCHDOG_SECS=$(( TOTAL_SECS + 20 ))
+WATCHDOG_PID=""
+run_watchdog() {
+    sleep "$WATCHDOG_SECS"
+    echo "  [watchdog] run exceeded ${WATCHDOG_SECS}s hard cap — force-stopping loaders." >&2
+    for ip in "${LOADER_ARRAY[@]}"; do
+        ssh "${SSH_OPTS[@]}" -o ConnectTimeout=8 ubuntu@"$ip" \
+            "pkill -KILL -f 'perf-cql-raw' 2>/dev/null; \
+             pkill -KILL -f 'workloads/run_benchmark.sh' 2>/dev/null; \
+             pkill -KILL -x latte 2>/dev/null; \
+             sudo iptables -t nat -F OUTPUT 2>/dev/null; true" >/dev/null 2>&1 &
+    done
+    wait 2>/dev/null || true
+    # Close the local ssh channels so their `wait` returns.
+    for pid in "${PIDS[@]:-}"; do kill -TERM "$pid" 2>/dev/null || true; done
+}
+run_watchdog &
+WATCHDOG_PID=$!
+
 FAIL=0
 for pid in "${PIDS[@]}"; do
-    wait "$pid" || FAIL=1
+    # A loader SSH child that is TERMINATED (SIGTERM=143 / SIGINT=130) during
+    # normal end-of-run teardown is NOT a benchmark failure — the storm's own
+    # process teardown and the -tt PTY closing can surface as these codes. Only
+    # treat a genuine non-signal failure exit as an error.
+    rc=0
+    wait "$pid" || rc=$?
+    if [ "$rc" -ne 0 ] && [ "$rc" -ne 143 ] && [ "$rc" -ne 130 ]; then
+        FAIL=1
+    fi
 done
+
+# Workload done — cancel the watchdog so it doesn't fire after a clean finish.
+if [ -n "$WATCHDOG_PID" ]; then
+    kill "$WATCHDOG_PID" 2>/dev/null
+    wait "$WATCHDOG_PID" 2>/dev/null
+    WATCHDOG_PID=""
+fi
 
 # Stop the progress ticker now that the workload is done.
 if [ -n "$PROGRESS_PID" ]; then
@@ -376,3 +416,9 @@ if [ "$SNAPSHOT" = "1" ]; then
         echo "WARNING: $SCRIPT_DIR/fetch_snapshot.sh not found or not executable; skipping snapshot."
     fi
 fi
+
+# Exit with a normalized status: 0 on a clean run, 1 only if a loader genuinely
+# failed (signal-terminated loaders during teardown were already excluded from
+# FAIL above). This prevents a stray SIGTERM (143) from a storm loader's SSH
+# child from bubbling up as the whole benchmark's exit code.
+exit "$FAIL"
