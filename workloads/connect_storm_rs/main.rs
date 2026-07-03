@@ -39,6 +39,7 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use rand::seq::SliceRandom;
+use rand::Rng;
 use scylla::client::session_builder::SessionBuilder;
 use scylla::client::PoolSize;
 use tokio::sync::Semaphore;
@@ -132,13 +133,16 @@ async fn open_hold_close(
     match build {
         Ok(session) => {
             opened.fetch_add(1, Ordering::Relaxed);
-            // Hold the session open for the configured duration, then let it drop
-            // at end of scope (Session dtor closes the underlying connections).
+            // Hold ONLY successful sessions open for the configured duration, then
+            // let them drop at end of scope (Session dtor closes the connections).
             tokio::time::sleep(hold).await;
             drop(session);
             closed.fetch_add(1, Ordering::Relaxed);
         }
         Err(_) => {
+            // A failed connect returns IMMEDIATELY — no `hold` sleep — so its
+            // in-flight permit is released right away and the pacer never stalls
+            // waiting on failures. The hold is a property of a live session only.
             failed.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -182,6 +186,19 @@ async fn main() {
     let mut next_launch = Instant::now();
 
     // Pacer loop: spawn a new connect task every `interval` until the deadline.
+    //
+    // The launch cadence is driven purely by wall-clock time (`next_launch`) and
+    // is DECOUPLED from how long individual sessions live. This is deliberate:
+    //   * `--hold` governs only how long a SUCCESSFULLY opened session is kept
+    //     before being dropped; it must NOT throttle new-connection launches.
+    //   * a FAILED connect returns immediately (no hold) and frees its in-flight
+    //     permit right away, so a wave of failures cannot stall the pacer.
+    // Together this keeps a smooth, continuous stream of new-connection attempts
+    // (no sawtooth spikes/gaps) regardless of per-connect success or latency.
+    //
+    // Sub-millisecond random jitter is added to every interval so launches don't
+    // align into periodic bursts (which show up as spikes on the monitoring
+    // scrape) — connects are smeared evenly within each tick instead.
     while Instant::now() < deadline {
         let now = Instant::now();
         if now < next_launch {
@@ -189,12 +206,14 @@ async fn main() {
             continue;
         }
 
-        // Acquire an in-flight permit (non-blocking). If we're at the ceiling,
-        // skip this tick rather than unbounded-queueing; keeps the loader stable.
+        // Acquire an in-flight permit. This ceiling only exists as an fd/memory
+        // safety valve. If we're momentarily at the cap, DON'T drop this launch
+        // (that would create a gap and then a catch-up burst); instead yield
+        // briefly and retry so the launch still happens and cadence is preserved.
         let permit = match Arc::clone(&sem).try_acquire_owned() {
             Ok(p) => p,
             Err(_) => {
-                next_launch += interval;
+                tokio::time::sleep(Duration::from_micros(200)).await;
                 continue;
             }
         };
@@ -210,7 +229,10 @@ async fn main() {
             open_hold_close(nodes, port, user, password, hold, o, f, c).await;
         });
 
-        next_launch += interval;
+        // Advance to the next launch slot and add sub-ms jitter (0..1000 µs) so
+        // successive connects don't fire in lockstep, smoothing the stream.
+        let jitter_us = rand::thread_rng().gen_range(0..1000);
+        next_launch += interval + Duration::from_micros(jitter_us);
     }
 
     // Drain: wait for in-flight sessions to finish their hold + close. Acquiring

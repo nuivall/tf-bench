@@ -23,7 +23,12 @@
 #                      [--steady-loaders 2] [--storm-rate 1000] [--storm-hold 2s]
 #                      [--threads 8] [--concurrency 64] [--steady-rate 36000]
 #                      [--connections N] [--user cassandra] [--password cassandra]
-#                      [--snapshot] [--snapshot-dir ./snapshots]
+#                      [--storm-only] [--snapshot] [--snapshot-dir ./snapshots]
+#
+# --storm-only runs a STORM-ONLY benchmark: it skips schema creation, data
+# pre-population, and the steady 50/50 load entirely, and puts EVERY loader in
+# the connection-storm role. Use it to exercise/iterate on the connection logic
+# alone (no latte.bench table or steady traffic required).
 #
 # --steady-rate is the TOTAL steady ops/s across all steady loaders (latte --rate,
 # the precise throughput throttle). --concurrency only CAPS in-flight requests and
@@ -62,6 +67,10 @@ SCYLLA_USER="cassandra"     # CQL auth user (cluster runs PasswordAuthenticator)
 SCYLLA_PASSWORD="cassandra" # CQL auth password
 SNAPSHOT="0"           # if 1, download a Prometheus snapshot after the run
 SNAPSHOT_DIR="./snapshots"
+STORM_ONLY="0"        # if 1, STORM-ONLY mode: skip schema + data pre-population and
+                       # the steady 50/50 load entirely; every loader runs the
+                       # connection storm. Use this to iterate on connection logic
+                       # without needing the latte.bench table or any steady traffic.
 
 while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -71,6 +80,7 @@ while [[ "$#" -gt 0 ]]; do
         --steady-loaders)    STEADY_LOADERS="$2"; shift 2 ;;
         --storm-rate)        STORM_RATE="$2"; shift 2 ;;
         --storm-hold)        STORM_HOLD="$2"; shift 2 ;;
+        --storm-only)        STORM_ONLY="1"; shift ;;
         --threads)           THREADS="$2"; shift 2 ;;
         --concurrency)       CONCURRENCY="$2"; shift 2 ;;
         --steady-rate)       STEADY_RATE="$2"; shift 2 ;;
@@ -107,6 +117,9 @@ if [ -z "$SCYLLA_IPS" ] || [ "$NUM_LOADERS" -lt 1 ]; then
     echo "Error: Could not retrieve IPs from Terraform output."
     exit 1
 fi
+# In STORM-ONLY mode (--storm-only) there is no steady traffic: force every loader
+# into the storm role by zeroing the steady-loader count.
+[ "$STORM_ONLY" = "1" ] && STEADY_LOADERS="0"
 [ "$STEADY_LOADERS" -gt "$NUM_LOADERS" ] && STEADY_LOADERS="$NUM_LOADERS"
 STORM_LOADERS=$((NUM_LOADERS - STEADY_LOADERS))
 
@@ -120,6 +133,9 @@ fi
 
 echo "Scylla Private IPs : $SCYLLA_IPS"
 echo "Loader fleet       : $NUM_LOADERS nodes"
+if [ "$STORM_ONLY" = "1" ]; then
+    echo "Mode               : STORM-ONLY (--storm-only: no schema, no data load, no steady traffic)"
+fi
 echo "Traffic-only nodes : $STEADY_LOADERS  (role=load, steady load, 0 new conns)"
 echo "Storm-only nodes   : $STORM_LOADERS  (role=flood, connection storm only)"
 echo "Steady duration    : $DURATION"
@@ -133,7 +149,7 @@ echo "Storm              : starts +$FLOOD_DELAY, lasts $FLOOD_DURATION, rate=${S
 [ -n "$MONITOR_IP" ] && echo "Grafana Dashboard  : http://$MONITOR_IP:3000"
 echo "========================================================================="
 
-if [ "$STORM_LOADERS" -lt 1 ]; then
+if [ "$STORM_LOADERS" -lt 1 ] && [ "$STORM_ONLY" != "1" ]; then
     echo "WARNING: STEADY_LOADERS ($STEADY_LOADERS) uses the entire fleet of $NUM_LOADERS loaders;"
     echo "         there are NO storm-only loaders left. Reduce --steady-loaders to run a"
     echo "         connection storm, or add more loaders. Continuing with traffic only."
@@ -210,14 +226,35 @@ wait
 echo "Sync complete."
 
 # ---- 2. Schema + data load on loader #0 (blocking, before timed phases) ------
-LOADER0="${LOADER_ARRAY[0]}"
-echo "Preparing schema + loading data on loader #0 ($LOADER0)..."
-ssh "${SSH_OPTS[@]}" ubuntu@"$LOADER0" \
-    "/home/ubuntu/workloads/run_benchmark.sh --role load --schema \
-        --duration 1s --flood-delay 0s --flood-duration 0s \
-        --user '$SCYLLA_USER' --password '$SCYLLA_PASSWORD' \
-        $SCYLLA_IPS" 2>&1 | sed "s/^/  [loader0-prep] /" || true
-echo "Schema + data load done."
+# This step creates the schema and pre-populates latte.bench. It is a HARD
+# PREREQUISITE: if it fails, the steady loaders would read/write a non-existent
+# table and silently generate no benchmark traffic, while the connection storm
+# still pins the cluster — producing a run that looks busy but never exercised
+# the real load. So abort here rather than continue into a "storm-only" run.
+#
+# In STORM-ONLY mode (--storm-only) there is no steady load, so this prerequisite is
+# skipped entirely: no schema is created and no data is pre-populated.
+if [ "$STORM_ONLY" = "1" ]; then
+    echo "STORM-ONLY mode (--storm-only): skipping schema + data pre-population."
+else
+    LOADER0="${LOADER_ARRAY[0]}"
+    echo "Preparing schema + loading data on loader #0 ($LOADER0)..."
+    if ! ssh "${SSH_OPTS[@]}" ubuntu@"$LOADER0" \
+        "/home/ubuntu/workloads/run_benchmark.sh --role load --schema \
+            --duration 1s --flood-delay 0s --flood-duration 0s \
+            --user '$SCYLLA_USER' --password '$SCYLLA_PASSWORD' \
+            $SCYLLA_IPS" 2>&1 | sed "s/^/  [loader0-prep] /"; then
+        echo "========================================================================="
+        echo " ERROR: schema + data load FAILED on loader #0 ($LOADER0)."
+        echo "        The latte keyspace/table was not prepared, so the steady load"
+        echo "        would generate no traffic. Aborting BEFORE the connection storm."
+        echo "        Inspect the failure with:"
+        echo "          ssh -i $KEY_FILE ubuntu@$LOADER0 'tail -n 40 ~/latte-load.log'"
+        echo "========================================================================="
+        exit 1
+    fi
+    echo "Schema + data load done."
+fi
 
 # ---- 3. Launch all loaders in parallel with their assigned roles -------------
 echo "========================================================================="

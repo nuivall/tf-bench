@@ -18,8 +18,18 @@
 #   ./run_full_benchmark.sh [--monitoring-dir /code/scylladb/scylla-monitoring]
 #                           [--snapshot-dir ./snapshots]
 #                           [--tf-var 'trusted_cidr=1.2.3.4/32']   (repeatable)
-#                           [--boot-timeout 900] [--no-load]
+#                           [--boot-timeout 900] [--no-monitoring-snapshot-load]
+#                           [--storm-only]
 #                           [-- <args passed through to run_benchmark.sh>]
+#
+# --storm-only runs a connection-storm-only benchmark (no schema, no data load,
+# no steady traffic; every loader storms). It simply forwards --storm-only to
+# run_benchmark.sh.
+#
+# --no-monitoring-snapshot-load skips the FINAL step of loading the captured
+# Prometheus snapshot into the LOCAL Scylla Monitoring stack. It only affects
+# post-run local visualization and is unrelated to --storm-only (the two are
+# independent and may be combined).
 #
 # Everything after a literal `--` is forwarded verbatim to ./run_benchmark.sh,
 # e.g.:
@@ -32,7 +42,8 @@ KEY_FILE="terraform/tf-scylla-benchmark-key.pem"
 MONITORING_DIR="/code/scylladb/scylla-monitoring"
 SNAPSHOT_DIR="./snapshots"
 BOOT_TIMEOUT="900"       # seconds to wait for instances to finish provisioning
-DO_LOAD="1"              # load the snapshot locally at the end
+DO_LOAD="1"              # load the monitoring snapshot into the LOCAL stack at the end
+STORM_ONLY="0"           # if 1, forward --storm-only to run_benchmark.sh (storm-only)
 TF_VARS=()               # extra -var arguments for terraform
 BENCH_ARGS=()            # forwarded to run_benchmark.sh
 
@@ -42,12 +53,19 @@ while [[ "$#" -gt 0 ]]; do
         --snapshot-dir)   SNAPSHOT_DIR="$2"; shift 2 ;;
         --boot-timeout)   BOOT_TIMEOUT="$2"; shift 2 ;;
         --tf-var)         TF_VARS+=("-var" "$2"); shift 2 ;;
-        --no-load)        DO_LOAD="0"; shift ;;
+        --no-monitoring-snapshot-load) DO_LOAD="0"; shift ;;
+        --storm-only)     STORM_ONLY="1"; shift ;;
         --)               shift; BENCH_ARGS=("$@"); break ;;
         -h|--help)        grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown parameter: $1" >&2; exit 1 ;;
     esac
 done
+
+# Forward storm-only to the benchmark. Appended AFTER parsing so it survives even
+# when `--` supplied an explicit BENCH_ARGS list (which would otherwise replace
+# anything set during the loop). Harmless if the user also passed --storm-only
+# themselves after `--` (run_benchmark.sh treats the flag idempotently).
+[ "$STORM_ONLY" = "1" ] && BENCH_ARGS+=("--storm-only")
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -191,6 +209,6 @@ if [ "$DO_LOAD" = "1" ] && [ -n "$SNAPSHOT_DATA_DIR" ]; then
 elif [ "$DO_LOAD" = "1" ]; then
     echo "No snapshot was captured; skipping local load."
 else
-    echo "Local load disabled (--no-load)."
+    echo "Local monitoring-snapshot load disabled (--no-monitoring-snapshot-load)."
     [ -n "$SNAPSHOT_DATA_DIR" ] && echo "Snapshot data dir: $SNAPSHOT_DATA_DIR"
 fi

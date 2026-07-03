@@ -128,20 +128,24 @@ QUIET_ARG="-q -s 100000s"
 # is already --concurrency).
 AUTH_ARG="--user $SCYLLA_USER --password $SCYLLA_PASSWORD"
 
-echo "========================================================================="
-echo " PER-LOADER RUN  host=$HOST  role=$ROLE"
-echo "   scylla targets : $SCYLLA_IPS"
-echo "   auth user      : $SCYLLA_USER"
-echo "   steady load    : -f read:0.5 -f write:0.5 -d $DURATION -t $THREADS -p $CONCURRENCY ${RATE_ARG:-(unthrottled)} $CONN_ARG"
-echo "   storm          : delay=$FLOOD_DELAY duration=$FLOOD_DURATION rate=${STORM_RATE}/s hold=$STORM_HOLD (role-dependent)"
-echo "========================================================================="
-
 # Optional: one designated loader prepares schema + pre-populates data.
+# This is a PREREQUISITE for every other loader: without the schema and the
+# pre-populated `latte.bench` table, the steady 50/50 workload has nothing to
+# read/write and silently generates zero benchmark traffic. So if either the
+# schema or the data load fails, abort here (non-zero) instead of proceeding —
+# otherwise the run degrades into a "storm-only" benchmark that still LOOKS busy
+# (the connection storm pins the reactor) while the real load never ran.
 if [ "$DO_SCHEMA" = "1" ]; then
     banner "[schema] Initializing schema..."
-    run_latte latte schema $AUTH_ARG "$WORKLOAD_PATH" $SCYLLA_IPS
+    if ! run_latte latte schema $AUTH_ARG "$WORKLOAD_PATH" $SCYLLA_IPS; then
+        banner "[schema] FATAL: schema creation failed — aborting (see $LATTE_LOG)."
+        exit 1
+    fi
     banner "[load] Pre-populating 1,000,000 rows..."
-    run_latte latte run $QUIET_ARG $AUTH_ARG -f load -d 1000000 --threads 8 --concurrency 64 "$WORKLOAD_PATH" $SCYLLA_IPS
+    if ! run_latte latte run $QUIET_ARG $AUTH_ARG -f load -d 1000000 --threads 8 --concurrency 64 "$WORKLOAD_PATH" $SCYLLA_IPS; then
+        banner "[load] FATAL: data pre-population failed — aborting (see $LATTE_LOG)."
+        exit 1
+    fi
     banner "[load] Data load complete."
 fi
 
@@ -164,6 +168,10 @@ if [ "$ROLE" = "flood" ] || [ "$ROLE" = "both" ]; then
 fi
 
 # --- Steady-state load (load / both roles) ------------------------------------
+# Track the steady-load outcome so we can exit non-zero if latte failed. A failed
+# steady run means this loader produced NO benchmark traffic; the orchestrator
+# must see that as a failure rather than a clean run.
+LOAD_RC=0
 if [ "$ROLE" = "load" ] || [ "$ROLE" = "both" ]; then
     banner "[load] >>> STEADY-STATE 50/50 mixed load STARTED (persistent pool, 0 new conns) <<<"
     run_latte latte run $QUIET_ARG $AUTH_ARG -f read:0.5 -f write:0.5 \
@@ -172,8 +180,12 @@ if [ "$ROLE" = "load" ] || [ "$ROLE" = "both" ]; then
         -p "$CONCURRENCY" \
         $RATE_ARG \
         $CONN_ARG \
-        "$WORKLOAD_PATH" $SCYLLA_IPS
-    banner "[load] <<< STEADY-STATE load FINISHED >>>"
+        "$WORKLOAD_PATH" $SCYLLA_IPS || LOAD_RC=$?
+    if [ "$LOAD_RC" -ne 0 ]; then
+        banner "[load] ERROR: steady-state load exited $LOAD_RC — no traffic generated (see $LATTE_LOG)."
+    else
+        banner "[load] <<< STEADY-STATE load FINISHED >>>"
+    fi
 elif [ -n "$FLOOD_PID" ]; then
     # flood-only role: just wait for the flood to complete.
     banner "[storm] flood-only role; waiting for flood to finish..."
@@ -186,3 +198,6 @@ if [ -n "$FLOOD_PID" ]; then
 fi
 
 banner "Run complete (role=$ROLE)."
+# Propagate a failed steady-state load as this loader's exit status so the
+# orchestrator flags the run instead of reporting a clean success.
+exit "$LOAD_RC"
