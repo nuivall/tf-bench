@@ -50,15 +50,12 @@ FLOOD_DELAY="120s"      # 2m warm-up: steady load establishes a clean baseline
 FLOOD_DURATION="180s"   # storm length: 3m (fires at 2m, ends at 5m).
 STEADY_LOADERS="3"      # how many loaders run the steady ~80% traffic (rest = storm)
 # Connection-storm intensity (ScyllaDB `perf-cql-raw --workload connect`). Each
-# storm loader runs one perf-cql-raw process PER Scylla node; in-flight connect
-# cycles per process = STORM_CONNECTIONS_PER_SHARD x STORM_CONCURRENCY_PER_SHARD
-# x (loader cores). This concurrency saturates the server's per-shard
-# uninitialized-connections semaphore (default 8) to trigger
-# scylla_transport_connections_shed.
-# Configured at 416 connections * 10 concurrency per shard across 4 loader cores
-# and 3 target Scylla nodes => ~50,000 active ports/sockets at once per loader.
-STORM_CONNECTIONS_PER_SHARD="416"
-STORM_CONCURRENCY_PER_SHARD="10"
+# storm loader runs one perf-cql-raw process; in-flight connect cycles per process
+# = STORM_CONNECTIONS_PER_SHARD x STORM_CONCURRENCY_PER_SHARD x (loader cores).
+# Configured at 128 connections * 1 concurrency per shard across 4 loader cores =>
+# ~512 active ports/sockets at once per loader.
+STORM_CONNECTIONS_PER_SHARD="128"
+STORM_CONCURRENCY_PER_SHARD="1"
 STORM_SMP="0"          # perf-cql-raw --smp per storm process (0 = all loader cores)
 THREADS="8"
 CONCURRENCY="64"       # steady-load in-flight request CAP per thread (latte -p).
