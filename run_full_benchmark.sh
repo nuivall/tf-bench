@@ -82,6 +82,7 @@ fi
 
 SNAPSHOT_DATA_DIR=""     # set once the snapshot is fetched (used by loader step)
 DESTROYED="0"
+BENCH_PID=""             # pid/pgid of the benchmark (set while step 3 runs)
 
 banner() { echo "=========================================================================";
            echo " $*";
@@ -106,7 +107,16 @@ destroy_infra() {
     return "$rc"
 }
 trap destroy_infra EXIT
-trap 'exit 130' INT TERM
+# On Ctrl-C/termination, first tear down the benchmark's process group (its
+# ticker/watchdog/ssh children) so nothing keeps printing to this terminal, then
+# exit — which triggers the EXIT trap and runs terraform destroy.
+on_signal() {
+    if [ -n "$BENCH_PID" ]; then
+        kill -TERM "-$BENCH_PID" 2>/dev/null || true
+    fi
+    exit 130
+}
+trap on_signal INT TERM
 
 # ---- 1. terraform apply ------------------------------------------------------
 banner "STEP: terraform apply"
@@ -156,7 +166,18 @@ fi
 # ---- 3. Run the benchmark ----------------------------------------------------
 banner "STEP: run benchmark"
 BENCH_RC=0
-"$SCRIPT_DIR/run_benchmark.sh" "${BENCH_ARGS[@]+"${BENCH_ARGS[@]}"}" || BENCH_RC=$?
+# Run the benchmark in its OWN process group (setsid) and remember that group's
+# id. run_benchmark.sh spawns background helpers (a progress ticker, a watchdog)
+# and per-loader ssh pipelines; if we were ever interrupted while it runs, those
+# could otherwise be orphaned and keep printing "[progress] elapsed .." to this
+# terminal AFTER we've moved on to snapshot + teardown. Killing the whole group
+# once the benchmark returns (or if we get signalled) guarantees a clean stop.
+setsid "$SCRIPT_DIR/run_benchmark.sh" "${BENCH_ARGS[@]+"${BENCH_ARGS[@]}"}" &
+BENCH_PID=$!
+wait "$BENCH_PID" || BENCH_RC=$?
+# Reap any stragglers in the benchmark's process group (ticker/watchdog/ssh).
+kill -TERM "-$BENCH_PID" 2>/dev/null || true
+BENCH_PID=""
 [ "$BENCH_RC" -ne 0 ] && echo "WARNING: benchmark exited with code $BENCH_RC; continuing to snapshot + teardown." >&2
 
 # ---- 4. Fetch the monitoring snapshot ----------------------------------------

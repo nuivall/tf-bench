@@ -218,6 +218,36 @@ progress_ticker() {
 # best-effort remote pkill to every loader in parallel, and exits non-zero.
 PIDS=()
 ABORTING=0
+
+# Each loader pipeline is launched via `setsid` (see the workload loop below),
+# so its pid is also its process-group id. Signalling the NEGATED pid delivers
+# the signal to the whole group — the ssh -tt AND the tail `sed` — which is the
+# only reliable way to tear down a wedged `ssh -tt` (a lone `kill <subshell>`
+# leaves ssh/sed alive and makes `wait` block forever).
+kill_loader_groups() {
+    local sig="$1" pid
+    for pid in "${PIDS[@]:-}"; do
+        [ -n "$pid" ] || continue
+        kill "-$sig" "-$pid" 2>/dev/null || kill "-$sig" "$pid" 2>/dev/null || true
+    done
+}
+
+# Reap the local heartbeat + watchdog background jobs. Safe to call repeatedly.
+stop_bg_helpers() {
+    [ -n "${PROGRESS_PID:-}" ] && { kill "$PROGRESS_PID" 2>/dev/null; PROGRESS_PID=""; }
+    [ -n "${WATCHDOG_PID:-}" ] && { kill "$WATCHDOG_PID" 2>/dev/null; WATCHDOG_PID=""; }
+}
+
+# Final safety net: whatever path we exit by (normal, error, signal), make sure
+# no background helper or loader process group is left writing to the terminal.
+# This is what prevents an orphaned "[progress] elapsed .." ticker from
+# continuing to print after the parent has moved on to teardown.
+final_cleanup() {
+    stop_bg_helpers
+    kill_loader_groups TERM
+}
+trap final_cleanup EXIT
+
 cleanup_and_exit() {
     # Guard against re-entrancy (double Ctrl-C).
     [ "$ABORTING" = "1" ] && return
@@ -226,12 +256,10 @@ cleanup_and_exit() {
     echo "========================================================================="
     echo " Ctrl-C received — stopping local SSH sessions and remote workloads..."
     echo "========================================================================="
-    # Stop the progress ticker if it's running.
-    [ -n "${PROGRESS_PID:-}" ] && kill "$PROGRESS_PID" 2>/dev/null
-    # Kill the local ssh child processes (closes the channels).
-    for pid in "${PIDS[@]:-}"; do
-        kill "$pid" 2>/dev/null
-    done
+    # Stop the local heartbeat + watchdog first so nothing keeps printing.
+    stop_bg_helpers
+    # Kill the local ssh child process GROUPS (closes the channels + tail sed).
+    kill_loader_groups TERM
     # Best-effort: kill latte + the storm processes (scylla perf-cql-raw) + the
     # remote runner on every loader, and flush the storm's iptables REDIRECT
     # rules, in parallel with a short connect timeout so we never hang here.
@@ -245,6 +273,8 @@ cleanup_and_exit() {
         done
         wait || true
     fi
+    # SIGKILL any loader group that ignored SIGTERM (wedged ssh -tt PTY).
+    kill_loader_groups KILL
     echo " Aborted. Remote workloads signalled to stop."
     [ -n "${MONITOR_IP:-}" ] && echo " View metrics: http://$MONITOR_IP:3000"
     exit 130
@@ -316,23 +346,30 @@ for idx in "${!LOADER_ARRAY[@]}"; do
     CONN_FLAG=""
     [ -n "$CONNECTIONS" ] && CONN_FLAG="--connections $CONNECTIONS"
 
-    (
+    # Launch each loader's ssh pipeline in its OWN process group (setsid) so we
+    # can later signal the ENTIRE tree — the ssh -tt process AND the sed at the
+    # tail of the pipe — with a single kill to the negated group id. Recording
+    # only the subshell's `$!` is not enough: killing the subshell leaves the
+    # `ssh -tt` (which readily wedges on a stuck PTY) and the `sed` alive, so the
+    # wait below would block forever and the progress ticker would run past the
+    # expected total. `setsid` makes the subshell a group leader whose pid == pgid.
+    setsid bash -c '
         # -tt allocates a remote PTY so that if this ssh is killed (Ctrl-C), the
         # remote process tree receives SIGHUP and dies too — a safety net on top
         # of the explicit remote pkill in cleanup_and_exit.
-        ssh -tt "${SSH_OPTS[@]}" ubuntu@"$ip" \
-            "/home/ubuntu/workloads/run_benchmark.sh \
-                --role $ROLE \
-                --duration $DURATION \
-                --flood-delay $FLOOD_DELAY \
-                --flood-duration $FLOOD_DURATION \
-                --storm-connections-per-shard $STORM_CONNECTIONS_PER_SHARD \
-                --storm-concurrency-per-shard $STORM_CONCURRENCY_PER_SHARD \
-                --storm-smp $STORM_SMP \
-                --threads $THREADS --concurrency $CONCURRENCY --rate $PER_LOADER_RATE $CONN_FLAG \
-                --user '$SCYLLA_USER' --password '$SCYLLA_PASSWORD' \
-                $SCYLLA_IPS" 2>&1 | sed "s/^/  [loader$idx:$ROLE] /"
-    ) &
+        ssh -tt "$@" 2>&1 | sed "s/^/  ['"loader$idx:$ROLE"'] /"
+    ' _ "${SSH_OPTS[@]}" ubuntu@"$ip" \
+        "/home/ubuntu/workloads/run_benchmark.sh \
+            --role $ROLE \
+            --duration $DURATION \
+            --flood-delay $FLOOD_DELAY \
+            --flood-duration $FLOOD_DURATION \
+            --storm-connections-per-shard $STORM_CONNECTIONS_PER_SHARD \
+            --storm-concurrency-per-shard $STORM_CONCURRENCY_PER_SHARD \
+            --storm-smp $STORM_SMP \
+            --threads $THREADS --concurrency $CONCURRENCY --rate $PER_LOADER_RATE $CONN_FLAG \
+            --user '$SCYLLA_USER' --password '$SCYLLA_PASSWORD' \
+            $SCYLLA_IPS" &
     PIDS+=($!)
 done
 
@@ -362,8 +399,14 @@ run_watchdog() {
              sudo iptables -t nat -F OUTPUT 2>/dev/null; true" >/dev/null 2>&1 &
     done
     wait 2>/dev/null || true
-    # Close the local ssh channels so their `wait` returns.
-    for pid in "${PIDS[@]:-}"; do kill -TERM "$pid" 2>/dev/null || true; done
+    # Close the local ssh channels so the main `wait` loop returns. Signal the
+    # whole process GROUP of each loader pipeline: SIGTERM first, then SIGKILL a
+    # moment later for any wedged `ssh -tt` that ignored SIGTERM. Killing the
+    # group (not just the subshell) is essential — otherwise the ssh/sed survive
+    # and the ticker keeps printing past the total.
+    kill_loader_groups TERM
+    sleep 3
+    kill_loader_groups KILL
 }
 run_watchdog &
 WATCHDOG_PID=$!
@@ -381,19 +424,12 @@ for pid in "${PIDS[@]}"; do
     fi
 done
 
-# Workload done — cancel the watchdog so it doesn't fire after a clean finish.
-if [ -n "$WATCHDOG_PID" ]; then
-    kill "$WATCHDOG_PID" 2>/dev/null
-    wait "$WATCHDOG_PID" 2>/dev/null
-    WATCHDOG_PID=""
-fi
-
-# Stop the progress ticker now that the workload is done.
-if [ -n "$PROGRESS_PID" ]; then
-    kill "$PROGRESS_PID" 2>/dev/null
-    wait "$PROGRESS_PID" 2>/dev/null
-    PROGRESS_PID=""
-fi
+# Workload done — cancel the watchdog and stop the ticker so neither can keep
+# running (or printing) after we move on. stop_bg_helpers is idempotent and is
+# also wired to the EXIT trap as a final safety net.
+_wd="$WATCHDOG_PID"
+stop_bg_helpers
+wait "$_wd" 2>/dev/null || true
 
 echo "========================================================================="
 if [ "$FAIL" -eq 0 ]; then
