@@ -18,6 +18,6 @@ __pycache__/
 workloads/connect_storm_rs/target/
 
 # Benchmark runtime output and harvested logs
-workload_timestamps.json
+/workload_timestamps.json
 logs/
 

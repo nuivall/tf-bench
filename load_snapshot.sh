@@ -103,19 +103,27 @@ if [ ! -x "$MONITORING_DIR/start-all.sh" ]; then
     exit 1
 fi
 
-echo ""
-echo "========================================================================="
-echo " Loading Snapshot: $(basename "$SELECTED_PATH")"
-echo "   data dir:  $DATA_DIR"
-echo "========================================================================="
-
-# 1. Stop any running local monitoring container stack
+# 1. Stop any running local monitoring container stack (to release lock on databases)
 echo "Clearing any active monitoring containers (kill-all.sh)..."
 ( cd "$MONITORING_DIR" && ./kill-all.sh >/dev/null 2>&1 ) || true
 
-# 2. Launch the local monitoring stack in archive mode
+# 2. Copy prometheus_data to a temporary directory to avoid modifying committed files
+SNAPSHOT_BASE=$(basename "$SELECTED_PATH")
+TEMP_DATA_DIR="/tmp/tf-bench-snapshot-${SNAPSHOT_BASE}"
+echo "Copying prometheus_data to temporary directory: $TEMP_DATA_DIR ..."
+rm -rf "$TEMP_DATA_DIR"
+mkdir -p "$TEMP_DATA_DIR"
+cp -a "$DATA_DIR/." "$TEMP_DATA_DIR/"
+
+echo ""
+echo "========================================================================="
+echo " Loading Snapshot: ${SNAPSHOT_BASE}"
+echo "   data dir:  $TEMP_DATA_DIR"
+echo "========================================================================="
+
+# 3. Launch the local monitoring stack in archive mode
 echo "Starting local monitoring stack against snapshot..."
-if ! ( cd "$MONITORING_DIR" && ./start-all.sh --archive "$DATA_DIR" ); then
+if ! ( cd "$MONITORING_DIR" && ./start-all.sh --archive "$TEMP_DATA_DIR" ); then
     echo "ERROR: failed to start local monitoring stack." >&2
     exit 1
 fi

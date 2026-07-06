@@ -133,6 +133,16 @@ echo "Extracting snapshot into $LOCAL_DATA_DIR ..." >&2
 mkdir -p "$LOCAL_DATA_DIR"
 tar xzf "$LOCAL_TARBALL" -C "$LOCAL_DATA_DIR"
 
+# Copy workload_timestamps.json if available in current dir or script dir
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "workload_timestamps.json" ]; then
+    echo "Copying workload_timestamps.json into snapshot folder ..." >&2
+    cp "workload_timestamps.json" "$DEST_DIR/"
+elif [ -f "$SCRIPT_DIR/workload_timestamps.json" ]; then
+    echo "Copying workload_timestamps.json into snapshot folder ..." >&2
+    cp "$SCRIPT_DIR/workload_timestamps.json" "$DEST_DIR/"
+fi
+
 # Resolve an absolute path for the load instructions.
 ABS_DATA_DIR="$(cd "$LOCAL_DATA_DIR" && pwd)"
 
