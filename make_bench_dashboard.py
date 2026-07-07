@@ -106,6 +106,13 @@ PANELS = [
         "Coordinator write ops/s per scheduling group.\n\n"
         "scylla_storage_proxy_coordinator_write_latency_count",
     ),
+    (
+        "CQL Internal Reads",
+        'sum(rate(scylla_cql_reads_per_ks{who="internal"}[$__rate_interval]))',
+        "ops",
+        "Internal CQL reads for the whole cluster.\n\n"
+        "scylla_cql_reads_per_ks",
+    ),
     # ---- Errors & failures ---------------------------------------------------
     (
         "CQL Errors by Type",

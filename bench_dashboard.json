@@ -292,8 +292,8 @@
     {
       "id": 6,
       "type": "timeseries",
-      "title": "CQL Errors by Type",
-      "description": "CQL protocol errors/s broken down by type (read_failure, read_timeout, server_error, ...).\n\nscylla_transport_cql_errors_total",
+      "title": "CQL Internal Reads",
+      "description": "Internal CQL reads for the whole cluster.\n\nscylla_cql_reads_per_ks",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -303,6 +303,61 @@
         "w": 12,
         "x": 12,
         "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(scylla_cql_reads_per_ks{who=\"internal\"}[$__rate_interval]))",
+          "legendFormat": "__auto",
+          "range": true,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "CQL Errors by Type",
+      "description": "CQL protocol errors/s broken down by type (read_failure, read_timeout, server_error, ...).\n\nscylla_transport_cql_errors_total",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
       },
       "fieldConfig": {
         "defaults": {
@@ -345,7 +400,7 @@
       ]
     },
     {
-      "id": 7,
+      "id": 8,
       "type": "timeseries",
       "title": "Failed Reads by Class",
       "description": "Replica-side failed reads/s per scheduling class. Tracks reader-admission shedding under load.\n\nscylla_database_total_reads_failed",
@@ -356,7 +411,7 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 24
       },
       "fieldConfig": {
@@ -400,7 +455,7 @@
       ]
     },
     {
-      "id": 8,
+      "id": 9,
       "type": "timeseries",
       "title": "CQL Connections Shed",
       "description": "New CQL connections shed/s (rejected by the server under connection pressure).\n\nscylla_transport_connections_shed",
@@ -411,8 +466,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 24
+        "x": 0,
+        "y": 32
       },
       "fieldConfig": {
         "defaults": {
@@ -455,7 +510,7 @@
       ]
     },
     {
-      "id": 9,
+      "id": 10,
       "type": "timeseries",
       "title": "CQL Connections Blocked",
       "description": "New CQL connections blocked/s (throttled at admission).\n\nscylla_transport_connections_blocked",
@@ -466,7 +521,7 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 32
       },
       "fieldConfig": {
