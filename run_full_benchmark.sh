@@ -6,13 +6,16 @@
 #   2. wait for boot          — poll until loaders + monitoring are ready
 #   3. run the benchmark      — ./run_benchmark.sh (traffic + connection storm)
 #   4. fetch the snapshot     — ./fetch_snapshot.sh (Prometheus TSDB tarball)
-#   5. load snapshot locally  — start the Scylla Monitoring stack in --archive mode
-#                               against the downloaded data so you can browse the
-#                               dashboards FAST (done before teardown so metrics
-#                               are visible as soon as possible). Also (re)creates
-#                               the custom benchmark dashboard via
+#   5. load snapshot locally  — OPT-IN (--monitoring-snapshot-load). Starts the
+#                               Scylla Monitoring stack in --archive mode against
+#                               the downloaded data so you can browse the
+#                               dashboards (done before teardown so metrics are
+#                               visible as soon as possible). Also (re)creates the
+#                               custom benchmark dashboard via
 #                               make_bench_dashboard.py, since the stack restart
 #                               wipes any previously-uploaded one.
+#                               DISABLED BY DEFAULT: the snapshot is still fetched
+#                               and kept on disk, it is just not auto-loaded.
 #   6. terraform destroy      — ALWAYS torn down, even if earlier steps failed.
 #
 # Teardown is unconditional: destroy runs from a trap so the AWS resources are
@@ -25,7 +28,8 @@
 #                           [--snapshot-dir ./snapshots]
 #                           [--scylla-version <version>]
 #                           [--tf-var 'trusted_cidr=1.2.3.4/32']   (repeatable)
-#                           [--boot-timeout 900] [--no-monitoring-snapshot-load]
+#                           [--boot-timeout 900]
+#                           [--monitoring-snapshot-load | --no-monitoring-snapshot-load]
 #                           [--storm-only]
 #                           [-- <args passed through to run_benchmark.sh>]
 #
@@ -33,10 +37,11 @@
 # no steady traffic; every loader storms). It simply forwards --storm-only to
 # run_benchmark.sh.
 #
-# --no-monitoring-snapshot-load skips the FINAL step of loading the captured
-# Prometheus snapshot into the LOCAL Scylla Monitoring stack. It only affects
-# post-run local visualization and is unrelated to --storm-only (the two are
-# independent and may be combined).
+# --monitoring-snapshot-load enables the FINAL step of loading the captured
+# Prometheus snapshot into the LOCAL Scylla Monitoring stack. It is OFF by
+# default: metrics are still gathered into --snapshot-dir, they are just not
+# auto-loaded. --no-monitoring-snapshot-load is accepted for compatibility and
+# is a no-op. This is unrelated to --storm-only (the two are independent).
 #
 # Everything after a literal `--` is forwarded verbatim to ./run_benchmark.sh,
 # e.g.:
@@ -50,7 +55,7 @@ KEY_FILE="terraform/tf-scylla-benchmark-key.pem"
 MONITORING_DIR="/code/scylladb/scylla-monitoring"
 SNAPSHOT_DIR="./snapshots"
 BOOT_TIMEOUT="900"       # seconds to wait for instances to finish provisioning
-DO_LOAD="1"              # load the monitoring snapshot into the LOCAL stack at the end
+DO_LOAD="0"              # load the monitoring snapshot into the LOCAL stack at the end (opt-in)
 STORM_ONLY="0"           # if 1, forward --storm-only to run_benchmark.sh (storm-only)
 SCYLLA_VER=""            # ScyllaDB version (e.g. 2026.2.0, 2025.1.9)
 TF_VARS=()               # extra -var arguments for terraform
@@ -64,6 +69,7 @@ while [[ "$#" -gt 0 ]]; do
         --scylla-version) SCYLLA_VER="$2"; shift 2 ;;
         --tf-var)         TF_VARS+=("-var" "$2"); shift 2 ;;
         --no-monitoring-snapshot-load) DO_LOAD="0"; shift ;;
+        --monitoring-snapshot-load)    DO_LOAD="1"; shift ;;
         --storm-only)     STORM_ONLY="1"; shift ;;
         --)               shift; BENCH_ARGS=("$@"); break ;;
         -h|--help)        grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -338,8 +344,11 @@ if [ "$DO_LOAD" = "1" ] && [ -n "$SNAPSHOT_DATA_DIR" ]; then
 elif [ "$DO_LOAD" = "1" ]; then
     echo "No snapshot was captured; skipping local load."
 else
-    echo "Local monitoring-snapshot load disabled (--no-monitoring-snapshot-load)."
-    [ -n "$SNAPSHOT_DATA_DIR" ] && echo "Snapshot data dir: $SNAPSHOT_DATA_DIR"
+    echo "Local monitoring-snapshot load disabled (default; enable with --monitoring-snapshot-load)."
+    if [ -n "$SNAPSHOT_DATA_DIR" ]; then
+        echo "Snapshot data dir: $SNAPSHOT_DATA_DIR"
+        echo "Load it later with:  ( cd '$MONITORING_DIR' && ./kill-all.sh && ./start-all.sh --archive '$SNAPSHOT_DATA_DIR' )"
+    fi
 fi
 
 # ---- 6. Teardown -------------------------------------------------------------

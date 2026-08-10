@@ -34,7 +34,7 @@ We provide two execution flows. The **full automated script** handles the entire
 3. Automatically sets up the schema and runs the benchmark phases.
 4. Downloads all metrics as a Prometheus snapshot.
 5. Destroys the AWS infrastructure (`terraform destroy` is wrapped in a shell trap so it **always** tears down, even on errors/Ctrl-C).
-6. Loads the metrics snapshot locally and auto-zooms your local Scylla Monitoring Stack (`/code/scylladb/scylla-monitoring`) to the exact run window.
+6. Optionally (`--monitoring-snapshot-load`, off by default) loads the metrics snapshot locally and auto-zooms your local Scylla Monitoring Stack (`/code/scylladb/scylla-monitoring`) to the exact run window. By default the snapshot is only saved under `./snapshots/`; load it later with `./load_snapshot.sh`.
 
 At the end of the run, the precise start, storm-trigger, and end times are printed to your console:
 ```
