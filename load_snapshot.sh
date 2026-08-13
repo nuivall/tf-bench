@@ -160,6 +160,10 @@ if [ -f "$TIMESTAMPS_FILE" ]; then
     _ts_args=(--timestamps-file "$TIMESTAMPS_FILE")
 fi
 
+# Derive the ScyllaDB version from the snapshot directory name (e.g. "2026.2.0_baseline")
+SNAPSHOT_VER="$(basename "$SELECTED_PATH" | sed -n 's/^\([0-9][0-9.]*\).*/\1/p')"
+[ -n "$SNAPSHOT_VER" ] && _ts_args+=(--version "$SNAPSHOT_VER")
+
 echo "Uploading custom benchmark dashboard..."
 if [ -x "$SCRIPT_DIR/make_bench_dashboard.py" ]; then
     "$SCRIPT_DIR/make_bench_dashboard.py" --grafana-url http://localhost:3000 "${_ts_args[@]+"${_ts_args[@]}"}" \

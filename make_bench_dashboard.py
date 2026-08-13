@@ -174,7 +174,12 @@ def build_panel(panel_id, title, expr, unit, description, ds_uid, x, y):
     }
 
 
-def build_dashboard(ds_uid, time_from=None, time_to=None):
+def dashboard_title(version=None):
+    """Dashboard title, suffixed with the ScyllaDB version when known."""
+    return f"{DASH_TITLE} {version}" if version else DASH_TITLE
+
+
+def build_dashboard(ds_uid, time_from=None, time_to=None, version=None):
     panels = []
     for i, (title, expr, unit, desc) in enumerate(PANELS):
         x = (i % COLS) * PANEL_W
@@ -182,7 +187,7 @@ def build_dashboard(ds_uid, time_from=None, time_to=None):
         panels.append(build_panel(i + 1, title, expr, unit, desc, ds_uid, x, y))
     return {
         "uid": DASH_UID,
-        "title": DASH_TITLE,
+        "title": dashboard_title(version),
         "tags": ["scylla", "benchmark", "connection-storm"],
         "timezone": "browser",
         "schemaVersion": 42,
@@ -312,6 +317,8 @@ def main():
     ap.add_argument("--password", default="", help="Grafana basic-auth password.")
     ap.add_argument("--timestamps-file", default=None,
                     help="JSON file containing the benchmark run start/end timestamps to adjust dashboard window.")
+    ap.add_argument("--version", default=None, dest="version",
+                    help="ScyllaDB version to append to the dashboard title (e.g. 2026.2.0).")
     args = ap.parse_args()
 
     ts_data = None
@@ -328,7 +335,7 @@ def main():
         except Exception as e:
             sys.stderr.write(f"WARNING: failed to read timestamps file '{args.timestamps_file}': {e}\n")
 
-    dashboard = build_dashboard(args.datasource_uid, time_from, time_to)
+    dashboard = build_dashboard(args.datasource_uid, time_from, time_to, args.version)
 
     if args.out:
         with open(args.out, "w") as f:

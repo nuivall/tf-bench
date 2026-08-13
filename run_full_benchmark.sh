@@ -326,6 +326,7 @@ if [ "$DO_LOAD" = "1" ] && [ -n "$SNAPSHOT_DATA_DIR" ]; then
             # dashboard time window and mark the load / storm phases on all graphs.
             _ts_args=()
             [ -f "$SCRIPT_DIR/workload_timestamps.json" ] && _ts_args=(--timestamps-file "$SCRIPT_DIR/workload_timestamps.json")
+            [ -n "$SCYLLA_VER" ] && _ts_args+=(--version "$SCYLLA_VER")
             "$SCRIPT_DIR/make_bench_dashboard.py" --grafana-url http://localhost:3000 "${_ts_args[@]+"${_ts_args[@]}"}" \
                 || echo "WARNING: benchmark dashboard upload failed (stack is still up)." >&2
         else
